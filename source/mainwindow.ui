@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>960</width><height>720</height></rect></property>
+  <property name="minimumSize"><size><width>840</width><height>620</height></size></property>
+  <property name="windowTitle"><string>GVFG 開機循環測試（冷／暖）</string></property>
+  <property name="font"><font><family>Microsoft JhengHei UI</family><pointsize>11</pointsize></font></property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="mainLayout">
+    <property name="spacing"><number>12</number></property>
+    <property name="leftMargin"><number>20</number></property>
+    <property name="topMargin"><number>16</number></property>
+    <property name="rightMargin"><number>20</number></property>
+    <property name="bottomMargin"><number>16</number></property>
+    <item><layout class="QHBoxLayout" name="modeLayout">
+     <item><widget class="QLabel" name="bootModeTitle"><property name="text"><string>測試模式</string></property></widget></item>
+     <item><widget class="QComboBox" name="bootModeCombo"><property name="minimumSize"><size><width>280</width><height>34</height></size></property>
+      <item><property name="text"><string>冷開機（外部斷電）</string></property></item>
+      <item><property name="text"><string>暖重開機（Windows 重啟）</string></property></item>
+     </widget></item>
+     <item><spacer name="modeSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QLabel" name="modeLabel"><property name="text"><string>尚未開始</string></property></widget></item>
+    </layout></item>
+    <item><widget class="QGroupBox" name="targetGroup"><property name="title"><string>待測 APP</string></property>
+     <layout class="QVBoxLayout" name="targetLayout">
+      <item><layout class="QHBoxLayout" name="targetPathLayout">
+       <item><widget class="QLineEdit" name="targetPathEdit"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>請選擇待測 APP 的 EXE</string></property></widget></item>
+       <item><widget class="QPushButton" name="browseTargetButton"><property name="text"><string>瀏覽…</string></property><property name="minimumSize"><size><width>100</width><height>34</height></size></property></widget></item>
+      </layout></item>
+      <item><widget class="QLabel" name="targetHint"><property name="text"><string>選擇待測 EXE；選擇會自動保存，下次登入後沿用。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+     </layout>
+    </widget></item>
+    <item><widget class="QFrame" name="summaryFrame">
+     <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
+     <layout class="QVBoxLayout" name="summaryLayout">
+      <item><widget class="QLabel" name="statusLabel"><property name="font"><font><pointsize>20</pointsize><bold>true</bold></font></property><property name="text"><string>準備就緒 — 請先試跑</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item><widget class="QLabel" name="countLabel"><property name="text"><string>CH0 audio：尚未檢查</string></property></widget></item>
+     </layout>
+    </widget></item>
+    <item><widget class="QGroupBox" name="startupGroup"><property name="title"><string>登入後自動執行</string></property>
+     <layout class="QVBoxLayout" name="startupLayout">
+      <item><widget class="QLabel" name="startupLabel"><property name="text"><string>自動啟動：正在確認…</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item><layout class="QHBoxLayout" name="startupButtonsLayout">
+       <item><widget class="QPushButton" name="installButton"><property name="minimumSize"><size><width>170</width><height>36</height></size></property><property name="text"><string>安裝自動啟動</string></property></widget></item>
+       <item><widget class="QPushButton" name="uninstallButton"><property name="minimumSize"><size><width>170</width><height>36</height></size></property><property name="text"><string>解除自動啟動</string></property></widget></item>
+       <item><widget class="QLabel" name="startupHint"><property name="text"><string>安裝不會立即測試；下次登入後依選定模式執行。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      </layout></item>
+     </layout>
+    </widget></item>
+    <item><layout class="QHBoxLayout" name="actionsLayout">
+     <item><widget class="QPushButton" name="dryButton"><property name="minimumSize"><size><width>160</width><height>40</height></size></property><property name="text"><string>試跑（不關機）</string></property></widget></item>
+     <item><widget class="QPushButton" name="runButton"><property name="minimumSize"><size><width>150</width><height>40</height></size></property><property name="text"><string>正式測試</string></property></widget></item>
+     <item><widget class="QPushButton" name="stopButton"><property name="minimumSize"><size><width>130</width><height>40</height></size></property><property name="text"><string>停止</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+     <item><widget class="QPushButton" name="folderButton"><property name="minimumSize"><size><width>170</width><height>40</height></size></property><property name="text"><string>開啟紀錄資料夾</string></property></widget></item>
+    </layout></item>
+    <item><widget class="QLabel" name="modeNote"><property name="text"><string>冷開機：UART 尚未設定，PASS 後只會關機，需外部恢復供電。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+    <item><layout class="QHBoxLayout" name="historyActionsLayout" stretch="1,0">
+     <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次（正式 0／試跑 0）｜PASS 0｜FAIL 0｜停止 0｜未完成 0</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+     <item><widget class="QPushButton" name="clearButton"><property name="text"><string>清除紀錄</string></property><property name="minimumSize"><size><width>120</width><height>36</height></size></property></widget></item>
+    </layout></item>
+    <item><widget class="QGroupBox" name="logGroup"><property name="title"><string>測試紀錄（顯示最近 3000 行；CH0 received &gt; 0 判定 PASS）</string></property>
+     <layout class="QVBoxLayout" name="logLayout"><item><widget class="QPlainTextEdit" name="logEdit"><property name="readOnly"><bool>true</bool></property><property name="maximumBlockCount"><number>3000</number></property><property name="placeholderText"><string>開始測試後，在此顯示進度與結果。</string></property></widget></item></layout>
+    </widget></item>
+   </layout>
+  </widget>
+ </widget>
+ <tabstops><tabstop>bootModeCombo</tabstop><tabstop>targetPathEdit</tabstop><tabstop>browseTargetButton</tabstop><tabstop>installButton</tabstop><tabstop>uninstallButton</tabstop><tabstop>dryButton</tabstop><tabstop>runButton</tabstop><tabstop>stopButton</tabstop><tabstop>folderButton</tabstop><tabstop>clearButton</tabstop><tabstop>logEdit</tabstop></tabstops>
+ <resources/>
+ <connections/>
+</ui>
