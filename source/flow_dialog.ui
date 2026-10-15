@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>FlowDialog</class>
+ <widget class="QDialog" name="FlowDialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>1100</width><height>820</height></rect></property>
+  <property name="windowTitle"><string>GVFG 通用測試流程</string></property>
+  <property name="font"><font><family>Microsoft JhengHei UI</family><pointsize>10</pointsize></font></property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item><widget class="QLabel" name="introLabel"><property name="text"><string>編輯流程 → 單步試跑 → 執行完整流程。此介面不執行關機或重開機。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+   <item><layout class="QHBoxLayout" name="easyLayout">
+    <item><widget class="QPushButton" name="easyButton"><property name="text"><string>建立測試項目…</string></property><property name="minimumSize"><size><width>250</width><height>40</height></size></property></widget></item>
+    <item><widget class="QCheckBox" name="advancedCheck"><property name="text"><string>顯示進階設定</string></property></widget></item>
+   </layout></item>
+   <item><widget class="QGroupBox" name="targetGroup"><property name="title"><string>待測 APP 與 OCR</string></property><layout class="QGridLayout" name="targetLayout">
+    <item row="0" column="0"><widget class="QLabel" name="exeLabel"><property name="text"><string>待測 EXE</string></property></widget></item>
+    <item row="0" column="1"><widget class="QLineEdit" name="exeEdit"/></item>
+    <item row="0" column="2"><widget class="QPushButton" name="browseExeButton"><property name="text"><string>瀏覽…</string></property><property name="maximumSize"><size><width>180</width><height>16777215</height></size></property></widget></item>
+    <item row="1" column="0"><widget class="QLabel" name="argsLabel"><property name="text"><string>啟動參數</string></property></widget></item>
+    <item row="1" column="1"><widget class="QLineEdit" name="argsEdit"><property name="placeholderText"><string>可留空；含空白的參數請加雙引號</string></property></widget></item>
+    <item row="1" column="2"><widget class="QLineEdit" name="cwdEdit"><property name="placeholderText"><string>工作目錄：留空使用 EXE 所在資料夾</string></property></widget></item>
+    <item row="2" column="0"><widget class="QLabel" name="ocrLabel"><property name="text"><string>Tesseract EXE</string></property></widget></item>
+    <item row="2" column="1"><widget class="QLineEdit" name="ocrEdit"><property name="placeholderText"><string>只有 OCR 步驟需要；保留其 DLL 與 tessdata</string></property></widget></item>
+    <item row="2" column="2"><widget class="QPushButton" name="browseOcrButton"><property name="text"><string>選擇 OCR 引擎…</string></property><property name="maximumSize"><size><width>180</width><height>16777215</height></size></property></widget></item>
+    <item row="3" column="0"><widget class="QLabel" name="languageLabel"><property name="text"><string>OCR 語言</string></property></widget></item>
+    <item row="3" column="1"><widget class="QLineEdit" name="languageEdit"><property name="text"><string>eng</string></property><property name="placeholderText"><string>例如 eng 或 eng+chi_tra；需要對應 traineddata</string></property></widget></item>
+    <item row="3" column="2"><widget class="QLabel" name="fileLabel"><property name="text"><string>尚未保存流程</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+    <item row="4" column="0" colspan="3"><widget class="QCheckBox" name="reuseExistingCheck"><property name="text"><string>重用已開啟的待測 APP；未開啟時才啟動</string></property><property name="checked"><bool>true</bool></property></widget></item>
+   </layout></widget></item>
+   <item><layout class="QHBoxLayout" name="fileActions">
+    <item><widget class="QPushButton" name="openButton"><property name="text"><string>開啟流程</string></property></widget></item>
+    <item><widget class="QPushButton" name="saveButton"><property name="text"><string>保存流程</string></property></widget></item>
+    <item><widget class="QPushButton" name="bootImportButton"><property name="text"><string>匯入開關機測試</string></property></widget></item>
+    <item><widget class="QPushButton" name="insertBeforeButton"><property name="text"><string>在前插入…</string></property></widget></item>
+    <item><widget class="QPushButton" name="insertAfterButton"><property name="text"><string>在後插入…</string></property></widget></item>
+    <item><widget class="QPushButton" name="addButton"><property name="text"><string>新增步驟</string></property></widget></item>
+    <item><widget class="QPushButton" name="removeButton"><property name="text"><string>刪除步驟</string></property></widget></item>
+    <item><widget class="QPushButton" name="upButton"><property name="text"><string>上移</string></property></widget></item>
+    <item><widget class="QPushButton" name="downButton"><property name="text"><string>下移</string></property></widget></item>
+   </layout></item>
+   <item><layout class="QHBoxLayout" name="sampleLayout" stretch="2,1,1,0">
+    <item><widget class="QComboBox" name="sampleCombo"/></item>
+    <item><widget class="QComboBox" name="sampleSourceCombo"><item><property name="text"><string>文字來源：UIA</string></property></item><item><property name="text"><string>文字來源：OCR</string></property></item></widget></item>
+    <item><widget class="QComboBox" name="sampleApplyCombo"><item><property name="text"><string>追加檢查步驟</string></property></item><item><property name="text"><string>取代流程（含啟動／等待）</string></property></item></widget></item>
+    <item><widget class="QPushButton" name="sampleButton"><property name="text"><string>載入所選範例</string></property></widget></item>
+   </layout></item>
+   <item><widget class="QLabel" name="sampleHintLabel"><property name="text"><string>載入後請取 UIA 控制項或框選 OCR／影像區域，再單步試跑。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+   <item><widget class="QTableWidget" name="stepsTable">
+    <property name="minimumSize"><size><width>0</width><height>140</height></size></property>
+    <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+    <property name="selectionMode"><enum>QAbstractItemView::SingleSelection</enum></property>
+    <property name="editTriggers"><set>QAbstractItemView::NoEditTriggers</set></property>
+    <column><property name="text"><string>步驟</string></property></column><column><property name="text"><string>名稱</string></property></column>
+    <column><property name="text"><string>結果</string></property></column><column><property name="text"><string>讀取值／解析資訊</string></property></column>
+    <column><property name="text"><string>目標設定</string></property></column>
+   </widget></item>
+   <item><layout class="QHBoxLayout" name="windowLayout">
+    <item><widget class="QLabel" name="windowLabel"><property name="text"><string>此步驟待測視窗</string></property></widget></item>
+    <item><widget class="QComboBox" name="windowCombo"><property name="sizePolicy"><sizepolicy hsizetype="Expanding" vsizetype="Fixed"><horstretch>1</horstretch><verstretch>0</verstretch></sizepolicy></property></widget></item>
+    <item><widget class="QPushButton" name="refreshWindowsButton"><property name="text"><string>重新整理視窗</string></property></widget></item>
+   </layout></item>
+   <item><widget class="QLabel" name="bindingLabel"><property name="text"><string>請選取步驟以查看目標設定。</string></property><property name="wordWrap"><bool>true</bool></property><property name="textFormat"><enum>Qt::PlainText</enum></property><property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property></widget></item>
+   <item><layout class="QHBoxLayout" name="bindLayout">
+    <item><widget class="QPushButton" name="pickButton"><property name="text"><string>指一下文字／按鈕位置（倒數 3 秒）</string></property></widget></item>
+    <item><widget class="QPushButton" name="regionButton"><property name="text"><string>框選文字或預覽區域</string></property></widget></item>
+   </layout></item>
+   <item><widget class="QGroupBox" name="stepGroup"><property name="title"><string>所選步驟設定（自動套用）</string></property><layout class="QGridLayout" name="stepLayout">
+    <item row="0" column="0"><widget class="QLabel" name="typeLabel"><property name="text"><string>類型</string></property></widget></item>
+    <item row="0" column="1"><widget class="QComboBox" name="typeCombo"/></item>
+    <item row="0" column="2"><widget class="QLabel" name="nameLabel"><property name="text"><string>名稱</string></property></widget></item>
+    <item row="0" column="3"><widget class="QLineEdit" name="nameEdit"/></item>
+    <item row="1" column="0"><widget class="QLabel" name="selectorLabel"><property name="text"><string>UIA 名稱（或 regex:正規式）</string></property></widget></item>
+    <item row="1" column="1"><widget class="QLineEdit" name="selectorEdit"/></item>
+    <item row="1" column="2"><widget class="QLabel" name="idLabel"><property name="text"><string>AutomationId</string></property></widget></item>
+    <item row="1" column="3"><widget class="QLineEdit" name="idEdit"/></item>
+    <item row="2" column="0"><widget class="QLabel" name="textLabel"><property name="text"><string>文字／擷取正規式／快捷鍵</string></property></widget></item>
+    <item row="2" column="1"><widget class="QLineEdit" name="textEdit"><property name="placeholderText"><string>Enter / Tab / Esc / Ctrl+A / Ctrl+C / Ctrl+V / Alt+F4</string></property></widget></item>
+    <item row="2" column="2"><widget class="QLabel" name="timeoutLabel"><property name="text"><string>等待／逾時（毫秒）</string></property></widget></item>
+    <item row="2" column="3"><widget class="QSpinBox" name="timeoutSpin"><property name="minimum"><number>1</number></property><property name="maximum"><number>600000</number></property><property name="value"><number>10000</number></property></widget></item>
+    <item row="3" column="0"><widget class="QLabel" name="conditionLabel"><property name="text"><string>判定條件</string></property></widget></item>
+    <item row="3" column="1"><widget class="QComboBox" name="conditionCombo"/></item>
+    <item row="3" column="2"><widget class="QLabel" name="expectedLabel"><property name="text"><string>預期值</string></property></widget></item>
+    <item row="3" column="3"><widget class="QLineEdit" name="expectedEdit"><property name="placeholderText"><string>數字、字串、正規式或 最小值,最大值</string></property></widget></item>
+    <item row="4" column="0" colspan="4"><layout class="QHBoxLayout" name="regionLayout">
+     <item><widget class="QLabel" name="regionLabel"><property name="text"><string>視窗內容座標（實體像素） X / Y / 寬 / 高</string></property></widget></item>
+     <item><widget class="QSpinBox" name="xSpin"><property name="maximum"><number>16384</number></property></widget></item>
+     <item><widget class="QSpinBox" name="ySpin"><property name="maximum"><number>16384</number></property></widget></item>
+     <item><widget class="QSpinBox" name="widthSpin"><property name="maximum"><number>16384</number></property></widget></item>
+     <item><widget class="QSpinBox" name="heightSpin"><property name="maximum"><number>16384</number></property></widget></item>
+    </layout></item>
+   </layout></widget></item>
+   <item><layout class="QHBoxLayout" name="runLayout">
+    <item><widget class="QPushButton" name="singleButton"><property name="text"><string>單步試跑</string></property></widget></item>
+    <item><widget class="QPushButton" name="runButton"><property name="text"><string>執行完整流程</string></property></widget></item>
+    <item><widget class="QPushButton" name="stopButton"><property name="text"><string>停止</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+    <item><widget class="QLabel" name="statusLabel"><property name="text"><string>準備就緒</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+   </layout></item>
+   <item><widget class="QPlainTextEdit" name="logEdit"><property name="readOnly"><bool>true</bool></property><property name="maximumBlockCount"><number>3000</number></property><property name="maximumSize"><size><width>16777215</width><height>160</height></size></property><property name="placeholderText"><string>顯示本次流程的操作、讀取值與結果；每次執行另存紀錄。</string></property></widget></item>
+  </layout>
+ </widget>
+ <resources/><connections/>
+</ui>

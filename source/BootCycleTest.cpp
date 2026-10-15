@@ -2,6 +2,7 @@
 #include <objbase.h>
 #include <oleauto.h>
 #include <uiautomation.h>
+#include "boot_flow_runner.h"
 
 #include <chrono>
 #include <filesystem>
@@ -234,18 +235,19 @@ int runBootTest(int argc, wchar_t **argv)
 {
     const fs::path dir = executableDirectory();
     bool dryRun = false, warmReboot = false, describeAction = false;
-    fs::path targetExe;
+    fs::path targetExe, flowFile;
     for (int i = 1; i < argc; ++i) {
         const std::wstring arg(argv[i]);
         if (arg == L"--dry-run") dryRun = true;
         else if (arg == L"--warm-reboot") warmReboot = true;
         else if (arg == L"--describe-action") describeAction = true;
         else if (arg == L"--target-exe" && i + 1 < argc) targetExe = argv[++i];
+        else if (arg == L"--flow-file" && i + 1 < argc) flowFile = argv[++i];
         else { std::wcerr << L"Unknown argument: " << arg << L'\n'; return 1; }
     }
     const wchar_t *powerCommand = warmReboot
-        ? L"shutdown.exe /r /t 0 /d p:4:1 /c \"GVFG warm reboot audio-frame test\""
-        : L"shutdown.exe /s /t 0 /d p:4:1 /c \"GVFG cold boot audio-frame test\"";
+        ? L"shutdown.exe /r /t 0 /d p:4:1 /c \"GVFG warm reboot test\""
+        : L"shutdown.exe /s /t 0 /d p:4:1 /c \"GVFG cold boot test\"";
     if (describeAction) {
         std::wcout << L"Mode=" << (warmReboot ? L"warm" : L"cold") << L"\nAction="
                    << (dryRun ? L"none (dry-run)" : powerCommand)
@@ -278,8 +280,20 @@ int runBootTest(int argc, wchar_t **argv)
         return 0;
     }
 
-    PROCESS_INFORMATION pi{};
     std::wstring error;
+    unsigned long long received = 0;
+    std::wstring statusText;
+    if (!flowFile.empty()) {
+        appendDetail(dir, L"Running imported flow: " + flowFile.wstring());
+        const int result = executeBootFlow(flowFile.wstring(), dir.wstring(), targetExe.wstring(),
+            [&](const std::wstring &message) {appendDetail(dir, message);}, error);
+        if (result == 2) {appendDetail(dir, L"STOP detected during imported flow; no power action"); CloseHandle(mutex); return 0;}
+        if (result != 0) {markFailure(dir, L"Imported flow failed: " + error); CloseHandle(mutex); return 1;}
+        statusText = L"ImportedFlow=" + flowFile.wstring();
+        appendResult(dir, L"PASS", 0, (warmReboot ? L"Mode=warm; " : L"Mode=cold; ") + statusText);
+        appendDetail(dir, L"PASS: flow=" + flowFile.wstring());
+    } else {
+    PROCESS_INFORMATION pi{};
     if (!launchTarget(targetExe, pi, error)) {
         markFailure(dir, error);
         CloseHandle(mutex);
@@ -335,9 +349,7 @@ int runBootTest(int argc, wchar_t **argv)
         return 1;
     }
 
-    unsigned long long received = 0;
     appendDetail(dir, L"Waiting for CH0 audio (30 second timeout)");
-    std::wstring statusText;
     for (DWORD i = 0; i < kAudioTimeoutSeconds && !stopRequested(dir); ++i) {
         if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
         if (readAudioCount(automation, window, received, statusText) && received > 0) break;
@@ -364,6 +376,7 @@ int runBootTest(int argc, wchar_t **argv)
 
     appendResult(dir, L"PASS", received, (warmReboot ? L"Mode=warm; " : L"Mode=cold; ") + statusText);
     appendDetail(dir, L"PASS: received=" + std::to_wstring(received));
+    }
 
     if (dryRun) {
         appendDetail(dir, L"Dry-run complete; controller command and shutdown skipped");

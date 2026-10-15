@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>TextCheck</class><widget class="QDialog" name="TextCheck">
+ <property name="geometry"><rect><x>0</x><y>0</y><width>760</width><height>600</height></rect></property>
+ <property name="windowTitle"><string>框選文字：辨識與判定</string></property>
+ <property name="font"><font><family>Microsoft JhengHei UI</family><pointsize>11</pointsize></font></property>
+ <layout class="QVBoxLayout" name="layout">
+  <item><widget class="QLabel" name="hintLabel"><property name="text"><string>確認框選內容、讀取文字，再選擇如何判斷。保存後會在每次測試重新讀取這個位置。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+  <item><widget class="QLabel" name="imageLabel"><property name="minimumSize"><size><width>400</width><height>100</height></size></property><property name="maximumSize"><size><width>16777215</width><height>180</height></size></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="frameShape"><enum>QFrame::StyledPanel</enum></property></widget></item>
+  <item><widget class="QPushButton" name="readButton"><property name="text"><string>讀取框內文字</string></property></widget></item>
+  <item><widget class="QPlainTextEdit" name="recognizedEdit"><property name="readOnly"><bool>true</bool></property><property name="maximumSize"><size><width>16777215</width><height>100</height></size></property><property name="placeholderText"><string>辨識結果會顯示在這裡；若讀錯，請重新框選並保留文字周圍一些空間。</string></property></widget></item>
+  <item><widget class="QCheckBox" name="presetCheck"><property name="text"><string>沿用這個步驟的既定條件</string></property></widget></item>
+  <item><widget class="QWidget" name="customWidget"><layout class="QGridLayout" name="customLayout">
+   <item row="0" column="0"><widget class="QLabel" name="kindLabel"><property name="text"><string>如何判斷</string></property></widget></item>
+   <item row="0" column="1" colspan="2"><widget class="QComboBox" name="kindCombo"><item><property name="text"><string>文字等於（忽略大小寫／空白）</string></property></item><item><property name="text"><string>包含這段文字</string></property></item><item><property name="text"><string>數字大於</string></property></item><item><property name="text"><string>數字介於範圍內</string></property></item></widget></item>
+   <item row="1" column="0"><widget class="QLabel" name="expectedLabel"><property name="text"><string>預期文字</string></property></widget></item>
+   <item row="1" column="1" colspan="2"><widget class="QLineEdit" name="expectedEdit"><property name="placeholderText"><string>例如 Running；請填你希望出現的狀態。</string></property></widget></item>
+   <item row="2" column="0"><widget class="QLabel" name="numberLabel"><property name="text"><string>數值／最小值、最大值</string></property></widget></item>
+   <item row="2" column="1"><widget class="QDoubleSpinBox" name="minimumSpin"><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property></widget></item>
+   <item row="2" column="2"><widget class="QDoubleSpinBox" name="maximumSpin"><property name="minimum"><double>-1000000000.000000000000000</double></property><property name="maximum"><double>1000000000.000000000000000</double></property><property name="value"><double>61.000000000000000</double></property></widget></item>
+  </layout></widget></item>
+  <item><widget class="QPushButton" name="checkButton"><property name="text"><string>檢查這次辨識結果</string></property></widget></item>
+  <item><widget class="QLabel" name="resultLabel"><property name="text"><string>準備讀取文字…</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+  <item><widget class="QDialogButtonBox" name="buttonBox"><property name="standardButtons"><set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set></property></widget></item>
+ </layout>
+</widget><resources/><connections/></ui>

@@ -1,5 +1,6 @@
 #pragma once
 #include "startup_manager.h"
+#include "flow_model.h"
 #include <QMainWindow>
 #include <QProcess>
 #include <QTimer>
@@ -25,6 +26,9 @@ private:
     void browseTarget();
     bool targetAvailable() const;
     bool checkEnvironment();
+    bool importBootFlow(const TestFlow &flow, const QString &sourceName = {});
+    void refreshBootFlowDisplay();
+    bool validateBootFlow(QString &error) const;
     void refreshStartup();
     void setRunning(bool running);
     void requestStop();
@@ -43,6 +47,7 @@ private:
     QProcess m_worker;
     QTimer m_logTimer, m_startupTimer;
     QString m_dir;
+    QString m_bootFlowFile, m_bootFlowName;
     QByteArray m_pending;
     qint64 m_logOffset = 0;
     quint64 m_formalCount = 0, m_dryCount = 0;

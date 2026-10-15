@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0"><class>EasyBuilder</class><widget class="QDialog" name="EasyBuilder">
+ <property name="geometry"><rect><x>0</x><y>0</y><width>850</width><height>760</height></rect></property>
+ <property name="windowTitle"><string>建立測試項目</string></property>
+ <property name="font"><font><family>Microsoft JhengHei UI</family><pointsize>10</pointsize></font></property>
+ <layout class="QVBoxLayout" name="layout">
+  <item><widget class="QLabel" name="intro"><property name="text"><string>勾選要檢查的項目，直接填入數值或預期字串。先預覽，再建立流程；不會立即執行測試。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+  <item><widget class="QGroupBox" name="checksGroup"><property name="title"><string>常用操作與檢查</string></property><layout class="QGridLayout" name="checksLayout">
+   <item row="0" column="0"><widget class="QCheckBox" name="startCheck"><property name="text"><string>點擊按鈕</string></property></widget></item>
+   <item row="0" column="1" colspan="3"><widget class="QCheckBox" name="runningCheck"><property name="text"><string>確認進入 Running</string></property></widget></item>
+   <item row="1" column="0"><widget class="QCheckBox" name="resolutionCheck"><property name="text"><string>確認解析度</string></property></widget></item>
+   <item row="1" column="1"><widget class="QSpinBox" name="widthSpin"><property name="minimum"><number>1</number></property><property name="maximum"><number>16384</number></property><property name="value"><number>1920</number></property></widget></item>
+   <item row="1" column="2"><widget class="QLabel" name="timesLabel"><property name="text"><string>×</string></property></widget></item>
+   <item row="1" column="3"><widget class="QSpinBox" name="heightSpin"><property name="minimum"><number>1</number></property><property name="maximum"><number>16384</number></property><property name="value"><number>1080</number></property></widget></item>
+   <item row="2" column="0"><widget class="QCheckBox" name="fpsCheck"><property name="text"><string>確認 FPS</string></property></widget></item>
+   <item row="2" column="1"><widget class="QDoubleSpinBox" name="fpsSpin"><property name="minimum"><double>0.010000000000000</double></property><property name="maximum"><double>1000.000000000000000</double></property><property name="value"><double>60.000000000000000</double></property></widget></item>
+   <item row="2" column="2"><widget class="QLabel" name="toleranceLabel"><property name="text"><string>允許誤差 ±</string></property></widget></item>
+   <item row="2" column="3"><widget class="QDoubleSpinBox" name="toleranceSpin"><property name="maximum"><double>1000.000000000000000</double></property><property name="value"><double>1.000000000000000</double></property></widget></item>
+   <item row="3" column="0" colspan="2"><widget class="QCheckBox" name="contentCheck"><property name="text"><string>預覽區有畫面內容</string></property></widget></item>
+   <item row="3" column="2" colspan="2"><widget class="QCheckBox" name="motionCheck"><property name="text"><string>預覽畫面會變動</string></property></widget></item>
+   <item row="4" column="0" colspan="2"><widget class="QCheckBox" name="audioCheck"><property name="text"><string>收到音訊 frame</string></property></widget></item>
+   <item row="4" column="2" colspan="2"><widget class="QCheckBox" name="videoCheck"><property name="text"><string>收到影像 frame</string></property></widget></item>
+   <item row="5" column="0"><widget class="QCheckBox" name="textCompareCheck"><property name="text"><string>比對字串</string></property></widget></item>
+   <item row="5" column="1" colspan="3"><widget class="QLineEdit" name="expectedTextEdit"><property name="maxLength"><number>512</number></property><property name="placeholderText"><string>預期文字，例如 Running、Stopped、No Signal、執行中</string></property></widget></item>
+   <item row="6" column="0"><widget class="QLabel" name="textConditionLabel"><property name="text"><string>比對方式</string></property></widget></item>
+   <item row="6" column="1" colspan="3"><widget class="QComboBox" name="textConditionCombo"/></item>
+   <item row="7" column="0"><widget class="QCheckBox" name="delayCheck"><property name="text"><string>等待時間（Delay）</string></property></widget></item>
+   <item row="7" column="1" colspan="3"><widget class="QDoubleSpinBox" name="delaySpin"><property name="decimals"><number>1</number></property><property name="minimum"><double>0.100000000000000</double></property><property name="maximum"><double>600.000000000000000</double></property><property name="singleStep"><double>0.100000000000000</double></property><property name="value"><double>1.000000000000000</double></property><property name="suffix"><string> 秒</string></property></widget></item>
+  </layout></widget></item>
+  <item><widget class="QLabel" name="statusLabel"><property name="text"><string>請自行勾選檢查項目或填入比對字串。建立後指一下文字位置，或框選文字區域。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+  <item><widget class="QPlainTextEdit" name="previewEdit"><property name="readOnly"><bool>true</bool></property></widget></item>
+  <item><widget class="QCheckBox" name="appendCheck"><property name="text"><string>追加到現有流程（未勾選則取代，並加入啟動 APP 與等待視窗）</string></property><property name="checked"><bool>true</bool></property></widget></item>
+  <item><widget class="QLabel" name="noteLabel"><property name="text"><string>比對字串可用於任意狀態文字。建立後指定文字位置或框選文字區域，再單步試跑。等待時間步驟不需指定目標。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+  <item><widget class="QDialogButtonBox" name="buttonBox"><property name="standardButtons"><set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set></property></widget></item>
+ </layout>
+</widget><resources/><connections/></ui>

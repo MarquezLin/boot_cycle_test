@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "flow_dialog.h"
 #include "ui_mainwindow.h"
 #include <QApplication>
 #include <QCloseEvent>
@@ -14,6 +15,9 @@
 #include <QTemporaryFile>
 #include <QTemporaryDir>
 #include <QUrl>
+#include <QDir>
+#include <QDateTime>
+#include <QUuid>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(std::make_unique<Ui::MainWindow>()),
@@ -24,7 +28,28 @@ MainWindow::MainWindow(QWidget *parent)
     QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     ui->bootModeCombo->setCurrentIndex(settings.value("Test/BootMode", "cold").toString() == "warm" ? 1 : 0);
     ui->targetPathEdit->setText(settings.value("Test/TargetExe").toString());
+    ui->useFlowCheck->setChecked(settings.value("Test/UseFlow", false).toBool());
+    const QString flowFile = settings.value("Test/FlowFile").toString();
+    if (!flowFile.isEmpty()) m_bootFlowFile = QDir(m_dir).absoluteFilePath(flowFile);
+    m_bootFlowName = settings.value("Test/FlowName").toString();
+    refreshBootFlowDisplay();
     connect(ui->browseTargetButton, &QPushButton::clicked, this, &MainWindow::browseTarget);
+    connect(ui->flowButton, &QPushButton::clicked, this, [this] {
+        FlowDialog dialog(ui->targetPathEdit->text(), this);
+        TestFlow imported; QString error;
+        if (ui->useFlowCheck->isChecked() && loadFlow(m_bootFlowFile, imported, error)) dialog.setEditingCopy(imported, m_bootFlowName);
+        dialog.setBootImporter([this, &dialog](const TestFlow &flow) {return importBootFlow(flow, dialog.sourceFileName());}); dialog.exec();
+    });
+    connect(ui->importFlowButton, &QPushButton::clicked, this, [this] {
+        const QString file = QFileDialog::getOpenFileName(this, "匯入開機後檢查流程", {}, "測試流程 (*.json)");
+        if (file.isEmpty()) return;
+        TestFlow flow; QString error;
+        if (!loadFlow(file, flow, error)) {QMessageBox::warning(this, "無法匯入流程", error); return;}
+        importBootFlow(flow, QFileInfo(file).fileName());
+    });
+    connect(ui->useFlowCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!saveSettings()) {QSignalBlocker block(ui->useFlowCheck); ui->useFlowCheck->setChecked(!checked);}
+    });
     refreshModeNote();
     connect(ui->bootModeCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (!saveSettings()) {
@@ -80,6 +105,9 @@ bool MainWindow::saveSettings()
     QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     settings.setValue("Test/BootMode", warmMode() ? "warm" : "cold");
     settings.setValue("Test/TargetExe", ui->targetPathEdit->text());
+    settings.setValue("Test/UseFlow", ui->useFlowCheck->isChecked());
+    settings.setValue("Test/FlowFile", m_bootFlowFile.isEmpty() ? QString() : QDir(m_dir).relativeFilePath(m_bootFlowFile));
+    settings.setValue("Test/FlowName", m_bootFlowName);
     settings.sync();
     if (settings.status() == QSettings::NoError) return true;
     QMessageBox::critical(this, "設定保存失敗", "無法保存模式與待測 APP 路徑，請檢查資料夾寫入權限。");
@@ -105,12 +133,51 @@ bool MainWindow::targetAvailable() const
     return !ui->targetPathEdit->text().isEmpty() && target.isAbsolute() && target.isFile()
         && target.suffix().compare("exe", Qt::CaseInsensitive) == 0;
 }
+bool MainWindow::validateBootFlow(QString &error) const
+{
+    if (!ui->useFlowCheck->isChecked()) return true;
+    TestFlow flow;
+    if (!loadFlow(m_bootFlowFile, flow, error) || !validateFlow(flow, error)) return false;
+    if (QFileInfo(flow.executable).canonicalFilePath().compare(QFileInfo(ui->targetPathEdit->text()).canonicalFilePath(), Qt::CaseInsensitive) != 0) {
+        error = "匯入流程的待測 APP 與主畫面不同，請重新匯入流程。"; return false;
+    }
+    return true;
+}
+void MainWindow::refreshBootFlowDisplay()
+{
+    ui->bootFlowPathEdit->setText(m_bootFlowFile.isEmpty() ? QString()
+        : m_bootFlowName.isEmpty() ? QStringLiteral("已匯入流程（未記錄原檔名）") : m_bootFlowName);
+    ui->bootFlowPathEdit->setToolTip(m_bootFlowFile.isEmpty() ? QString()
+        : QStringLiteral("執行用流程快照：\n") + QDir::toNativeSeparators(m_bootFlowFile));
+    ui->bootFlowPathEdit->setCursorPosition(0);
+}
+
+bool MainWindow::importBootFlow(const TestFlow &flow, const QString &sourceName)
+{
+    if (m_running) return false;
+    QString error;
+    if (!validateFlow(flow, error)) {QMessageBox::warning(this, "流程無法匯入", error); return false;}
+    const QString folder = m_dir + "/boot_flows";
+    const QString file = folder + "/flow_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss")
+        + '_' + QUuid::createUuid().toString(QUuid::Id128).left(8) + ".json";
+    if (!QDir().mkpath(folder) || !saveFlow(file, flow, error)) {QMessageBox::warning(this, "流程無法匯入", "無法保存匯入流程：" + error); return false;}
+    const QString previousTarget = ui->targetPathEdit->text(), previousFile = m_bootFlowFile, previousName = m_bootFlowName;
+    const bool previousUse = ui->useFlowCheck->isChecked(); QSignalBlocker blocker(ui->useFlowCheck);
+    ui->targetPathEdit->setText(QFileInfo(flow.executable).absoluteFilePath()); m_bootFlowFile = file; m_bootFlowName = QFileInfo(sourceName).fileName(); refreshBootFlowDisplay(); ui->useFlowCheck->setChecked(true);
+    if (!saveSettings()) {
+        ui->targetPathEdit->setText(previousTarget); m_bootFlowFile = previousFile; m_bootFlowName = previousName; refreshBootFlowDisplay(); ui->useFlowCheck->setChecked(previousUse); QFile::remove(file); return false;
+    }
+    ui->countLabel->setText(QString("通用流程：已匯入 %1 個步驟").arg(flow.steps.size()));
+    setRunning(false); setStatus("通用流程已匯入 — 請先試跑（不關機）"); return true;
+}
 
 bool MainWindow::checkEnvironment()
 {
     QString error;
     if (!targetAvailable()) {
         error = "待測 APP 不存在或不是 EXE，請按瀏覽重新選擇：" + ui->targetPathEdit->text();
+    } else if (!validateBootFlow(error)) {
+        error = "開機後檢查流程無效：" + error;
     } else {
         QTemporaryFile probe(m_dir + "/.write_check_XXXXXX");
         if (!probe.open() || probe.write("check") != 5 || !probe.flush())
@@ -160,6 +227,8 @@ void MainWindow::setRunning(bool running)
     ui->browseTargetButton->setEnabled(!running);
     ui->targetPathEdit->setEnabled(!running);
     ui->clearButton->setEnabled(!running);
+    ui->flowButton->setEnabled(!running);
+    ui->bootFlowGroup->setEnabled(!running);
     refreshStartup();
 }
 
@@ -197,11 +266,12 @@ void MainWindow::startTest(bool dry, bool automatic)
     m_dry = dry; m_pass = m_fail = m_stopping = false;
     ui->modeLabel->setText(dry ? "試跑：不關機／不重開機"
         : warmMode() ? "正式測試：PASS 後重開機" : "正式測試：PASS 後關機");
-    ui->countLabel->setText("CH0 audio：等待檢查");
-    setStatus(dry ? "檢查中 — 啟動 APP、等待 audio" : "檢查中 — 等待 20 秒再啟動 APP");
+    ui->countLabel->setText(ui->useFlowCheck->isChecked() ? "通用流程：等待檢查" : "CH0 audio：等待檢查");
+    setStatus(dry ? "檢查中 — 準備執行檢查" : "檢查中 — 等待 20 秒再執行檢查");
     QStringList args{"--worker", "--target-exe", target.absoluteFilePath()};
     if (dry) args << "--dry-run";
     if (warmMode()) args << "--warm-reboot";
+    if (ui->useFlowCheck->isChecked()) args << "--flow-file" << m_bootFlowFile;
     m_worker.setWorkingDirectory(m_dir);
     m_worker.setProgram(QCoreApplication::applicationFilePath());
     m_worker.setArguments(args);
@@ -255,7 +325,7 @@ void MainWindow::countHistoryLine(const QString &line)
     if (m_historyResult < 0) return;
     int result = m_historyResult;
     if (message.startsWith("FAIL:")) result = 2;
-    else if (message.startsWith("PASS: received=") && result != 2) result = 1;
+    else if ((message.startsWith("PASS: received=") || message.startsWith("PASS: flow=")) && result != 2) result = 1;
     else if ((message.startsWith("Stopped") || message.startsWith("STOP detected")
               || message.startsWith("Manual STOP detected")) && result == 0) result = 3;
     if (result != m_historyResult) {
@@ -323,10 +393,17 @@ void MainWindow::clearHistory()
 void MainWindow::showLine(const QString &line)
 {
     ui->logEdit->appendPlainText(line);
+    const qsizetype flowPrefix = line.indexOf(" | FLOW | ");
+    if (flowPrefix >= 0) {
+        if (!m_stopping && !m_fail && !m_pass) setStatus("流程檢查中 — " + line.mid(flowPrefix + 10));
+        return;
+    }
     static const QRegularExpression passPattern("PASS: received=([0-9]+)");
     const auto match = passPattern.match(line);
     if (line.contains("FAIL:")) {
         m_fail = true; setStatus("FAIL — 檢查失敗，已停止", "fail");
+    } else if (line.contains("PASS: flow=")) {
+        m_pass = true; ui->countLabel->setText("通用流程：全部步驟通過"); setStatus("PASS — 通用流程檢查通過", "pass");
     } else if (match.hasMatch()) {
         m_pass = true;
         ui->countLabel->setText("CH0 audio：已接收 " + match.captured(1) + " frames");
@@ -353,7 +430,7 @@ void MainWindow::finishTest(int exitCode, QProcess::ExitStatus status)
     readLog(); m_logTimer.stop(); setRunning(false);
     if (m_fail || exitCode != 0 || status == QProcess::CrashExit)
         setStatus("FAIL — 檢查或控制動作失敗", "fail");
-    else if (m_stopping) setStatus(m_pass ? "已停止 — 本次 audio PASS" : "已停止", "stopped");
+    else if (m_stopping) setStatus(m_pass ? "已停止 — 本次檢查 PASS" : "已停止", "stopped");
     else if (m_pass && m_dry) setStatus("PASS — 試跑完成，不關機", "pass");
     else if (!m_pass) setStatus("未取得結果 — 請查看本次紀錄");
 }
@@ -372,6 +449,8 @@ void MainWindow::showExisting()
 
 bool MainWindow::smokeTest()
 {
+    const bool previousUseFlow = ui->useFlowCheck->isChecked();
+    QSignalBlocker flowBlocker(ui->useFlowCheck); ui->useFlowCheck->setChecked(false);
     showLine("PASS: received=64");
     const bool pass = m_pass && ui->countLabel->text().contains("64 frames");
     showLine("FAIL: simulated smoke-test error");
@@ -420,6 +499,11 @@ bool MainWindow::smokeTest()
     loadHistory();
     const bool history = fixtureWritten && m_formalCount == 3 && m_dryCount == 1
         && m_results == std::array<quint64, 4>{1, 1, 1, 1} && ui->logEdit->toPlainText().contains("shutdown.exe failed");
+    countHistoryLine("2026-10-15 12:00:00 | Dry-run started");
+    countHistoryLine("2026-10-15 12:00:01 | FLOW | PASS: received=999");
+    const bool partialNotCounted = m_results == std::array<quint64, 4>{2, 1, 1, 1};
+    countHistoryLine("2026-10-15 12:00:02 | PASS: flow=example.json");
+    const bool importedCounted = m_results == std::array<quint64, 4>{1, 2, 1, 1};
     setRunning(true);
     const bool clearLocked = !ui->clearButton->isEnabled();
     setRunning(false);
@@ -429,7 +513,30 @@ bool MainWindow::smokeTest()
         && QFile::exists(m_dir + "/STOP") && QFile::exists(m_dir + "/FAILED");
     loadHistory();
     const bool reset = m_formalCount == 0 && m_dryCount == 0 && m_results == std::array<quint64, 4>{};
-    m_dir = originalDir; loadHistory();
+    QTemporaryDir importedRecords(originalDir + "/flow_import_check_XXXXXX");
+    if (!importedRecords.isValid()) return false;
+    m_dir = importedRecords.path();
+    const QString previousFlowFile = m_bootFlowFile, previousFlowName = m_bootFlowName;
+    TestFlow imported; imported.executable = QCoreApplication::applicationFilePath();
+    FlowStep delay; delay.type = "delay"; delay.name = "匯入測試"; delay.timeoutMs = 20; imported.steps = {delay};
+    const bool importedOk = importBootFlow(imported, "test1.json");
+    QString importedError; TestFlow saved;
+    const bool importedValid = importedOk && validateBootFlow(importedError)
+        && loadFlow(m_bootFlowFile, saved, importedError) && saved.steps.size() == 1 && saved.steps[0].name == delay.name;
+    QSettings importedSettings(m_dir + "/test_settings.ini", QSettings::IniFormat);
+    const bool persisted = importedSettings.value("Test/UseFlow").toBool()
+        && !QFileInfo(importedSettings.value("Test/FlowFile").toString()).isAbsolute()
+        && importedSettings.value("Test/FlowName").toString() == "test1.json"
+        && ui->bootFlowPathEdit->text() == "test1.json"
+        && ui->bootFlowPathEdit->toolTip().contains(QDir::toNativeSeparators(m_bootFlowFile));
+    m_pass = m_fail = false;
+    showLine("2026-10-15 12:00:00 | FLOW | PASS: received=999");
+    const bool noPartialPass = !m_pass && !m_fail;
+    showLine("2026-10-15 12:00:01 | PASS: flow=example.json");
+    const bool flowPass = m_pass && ui->countLabel->text().contains("全部步驟通過");
+    m_dir = originalDir; ui->useFlowCheck->setChecked(previousUseFlow); m_bootFlowFile = previousFlowFile; m_bootFlowName = previousFlowName; refreshBootFlowDisplay();
+    ui->targetPathEdit->setText(previous); loadHistory();
     return pass && fail && locked && idle && warm && cold && unconfigured && configured && history && clearLocked && cleared && reset
+        && importedValid && persisted && noPartialPass && flowPass && partialNotCounted && importedCounted
         && ui->bootModeCombo->count() == 2;
 }

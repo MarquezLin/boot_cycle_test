@@ -19,6 +19,7 @@
       <item><property name="text"><string>冷開機（外部斷電）</string></property></item>
       <item><property name="text"><string>暖重開機（Windows 重啟）</string></property></item>
      </widget></item>
+     <item><widget class="QPushButton" name="flowButton"><property name="text"><string>通用測試流程…</string></property><property name="minimumSize"><size><width>150</width><height>34</height></size></property></widget></item>
      <item><spacer name="modeSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer></item>
      <item><widget class="QLabel" name="modeLabel"><property name="text"><string>尚未開始</string></property></widget></item>
     </layout></item>
@@ -29,6 +30,16 @@
        <item><widget class="QPushButton" name="browseTargetButton"><property name="text"><string>瀏覽…</string></property><property name="minimumSize"><size><width>100</width><height>34</height></size></property></widget></item>
       </layout></item>
       <item><widget class="QLabel" name="targetHint"><property name="text"><string>選擇待測 EXE；選擇會自動保存，下次登入後沿用。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+     </layout>
+    </widget></item>
+    <item><widget class="QGroupBox" name="bootFlowGroup"><property name="title"><string>開機後檢查流程</string></property>
+     <layout class="QVBoxLayout" name="bootFlowLayout">
+      <item><layout class="QHBoxLayout" name="bootFlowActions">
+       <item><widget class="QCheckBox" name="useFlowCheck"><property name="text"><string>使用匯入的通用流程</string></property></widget></item>
+       <item><widget class="QLineEdit" name="bootFlowPathEdit"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>尚未匯入通用流程</string></property></widget></item>
+       <item><widget class="QPushButton" name="importFlowButton"><property name="text"><string>匯入流程…</string></property></widget></item>
+      </layout></item>
+      <item><widget class="QLabel" name="bootFlowHint"><property name="text"><string>未啟用時使用原本 CH0 audio 檢查；啟用後以通用流程全部通過為準。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
      </layout>
     </widget></item>
     <item><widget class="QFrame" name="summaryFrame">
@@ -59,7 +70,7 @@
      <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次（正式 0／試跑 0）｜PASS 0｜FAIL 0｜停止 0｜未完成 0</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
      <item><widget class="QPushButton" name="clearButton"><property name="text"><string>清除紀錄</string></property><property name="minimumSize"><size><width>120</width><height>36</height></size></property></widget></item>
     </layout></item>
-    <item><widget class="QGroupBox" name="logGroup"><property name="title"><string>測試紀錄（顯示最近 3000 行；CH0 received &gt; 0 判定 PASS）</string></property>
+    <item><widget class="QGroupBox" name="logGroup"><property name="title"><string>測試紀錄（顯示最近 3000 行）</string></property>
      <layout class="QVBoxLayout" name="logLayout"><item><widget class="QPlainTextEdit" name="logEdit"><property name="readOnly"><bool>true</bool></property><property name="maximumBlockCount"><number>3000</number></property><property name="placeholderText"><string>開始測試後，在此顯示進度與結果。</string></property></widget></item></layout>
     </widget></item>
    </layout>
