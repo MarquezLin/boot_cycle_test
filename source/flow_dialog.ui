@@ -8,13 +8,18 @@
   <layout class="QVBoxLayout" name="mainLayout">
    <item><widget class="QLabel" name="introLabel"><property name="text"><string>編輯流程 → 單步試跑 → 執行完整流程。此介面不執行關機或重開機。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
    <item><layout class="QHBoxLayout" name="easyLayout">
-    <item><widget class="QPushButton" name="easyButton"><property name="text"><string>建立測試項目…</string></property><property name="minimumSize"><size><width>250</width><height>40</height></size></property></widget></item>
+    <item><widget class="QPushButton" name="easyButton"><property name="text"><string>補充等待／畫面檢查…</string></property><property name="minimumSize"><size><width>250</width><height>40</height></size></property></widget></item>
     <item><widget class="QCheckBox" name="advancedCheck"><property name="text"><string>顯示進階設定</string></property></widget></item>
    </layout></item>
    <item><widget class="QGroupBox" name="targetGroup"><property name="title"><string>待測 APP 與 OCR</string></property><layout class="QGridLayout" name="targetLayout">
     <item row="0" column="0"><widget class="QLabel" name="exeLabel"><property name="text"><string>待測 EXE</string></property></widget></item>
     <item row="0" column="1"><widget class="QLineEdit" name="exeEdit"/></item>
     <item row="0" column="2"><widget class="QPushButton" name="browseExeButton"><property name="text"><string>瀏覽…</string></property><property name="maximumSize"><size><width>180</width><height>16777215</height></size></property></widget></item>
+    <item row="0" column="3"><widget class="QPushButton" name="launchExeButton">
+     <property name="text"><string>開啟待測 EXE（F6）</string></property>
+     <property name="shortcut"><string>F6</string></property>
+     <property name="autoDefault"><bool>false</bool></property>
+    </widget></item>
     <item row="1" column="0"><widget class="QLabel" name="argsLabel"><property name="text"><string>啟動參數</string></property></widget></item>
     <item row="1" column="1"><widget class="QLineEdit" name="argsEdit"><property name="placeholderText"><string>可留空；含空白的參數請加雙引號</string></property></widget></item>
     <item row="1" column="2"><widget class="QLineEdit" name="cwdEdit"><property name="placeholderText"><string>工作目錄：留空使用 EXE 所在資料夾</string></property></widget></item>
@@ -29,9 +34,8 @@
    <item><layout class="QHBoxLayout" name="fileActions">
     <item><widget class="QPushButton" name="openButton"><property name="text"><string>開啟流程</string></property></widget></item>
     <item><widget class="QPushButton" name="saveButton"><property name="text"><string>保存流程</string></property></widget></item>
-    <item><widget class="QPushButton" name="bootImportButton"><property name="text"><string>匯入開關機測試</string></property></widget></item>
-    <item><widget class="QPushButton" name="insertBeforeButton"><property name="text"><string>在前插入…</string></property></widget></item>
-    <item><widget class="QPushButton" name="insertAfterButton"><property name="text"><string>在後插入…</string></property></widget></item>
+    <item><widget class="QPushButton" name="insertBeforeButton"><property name="text"><string>在前補充…</string></property></widget></item>
+    <item><widget class="QPushButton" name="insertAfterButton"><property name="text"><string>在後補充…</string></property></widget></item>
     <item><widget class="QPushButton" name="addButton"><property name="text"><string>新增步驟</string></property></widget></item>
     <item><widget class="QPushButton" name="removeButton"><property name="text"><string>刪除步驟</string></property></widget></item>
     <item><widget class="QPushButton" name="upButton"><property name="text"><string>上移</string></property></widget></item>
@@ -51,7 +55,8 @@
     <property name="editTriggers"><set>QAbstractItemView::NoEditTriggers</set></property>
     <column><property name="text"><string>步驟</string></property></column><column><property name="text"><string>名稱</string></property></column>
     <column><property name="text"><string>結果</string></property></column><column><property name="text"><string>讀取值／解析資訊</string></property></column>
-    <column><property name="text"><string>目標設定</string></property></column>
+    <column><property name="text"><string>PASS 條件／目標</string></property></column>
+    <column><property name="text"><string>現場測試項目</string></property></column>
    </widget></item>
    <item><layout class="QHBoxLayout" name="windowLayout">
     <item><widget class="QLabel" name="windowLabel"><property name="text"><string>此步驟待測視窗</string></property></widget></item>
@@ -87,6 +92,9 @@
      <item><widget class="QSpinBox" name="widthSpin"><property name="maximum"><number>16384</number></property></widget></item>
      <item><widget class="QSpinBox" name="heightSpin"><property name="maximum"><number>16384</number></property></widget></item>
     </layout></item>
+    <item row="5" column="1"><widget class="QPushButton" name="previewNumberButton">
+     <property name="text"><string>預覽讀取並選取數字…</string></property>
+    </widget></item>
    </layout></widget></item>
    <item><layout class="QHBoxLayout" name="runLayout">
     <item><widget class="QPushButton" name="singleButton"><property name="text"><string>單步試跑</string></property></widget></item>

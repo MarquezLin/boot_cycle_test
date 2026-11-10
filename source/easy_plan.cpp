@@ -26,18 +26,19 @@ QVector<FlowStep> easyPlanSteps(const EasyPlan &p)
     if (p.content) {add(6); steps.last().name = "確認預覽區有畫面";}
     if (p.motion) {add(7); steps.last().name = "確認預覽畫面會變動";}
     if (p.textCompare) {
-        FlowStep step; step.type = "readUIA"; step.condition = p.textCondition; step.expected = p.expectedText; step.timeoutMs = 30000;
-        step.name = "比對字串（" + QString(p.textCondition.startsWith("contains") ? "包含" : "等於") + "）："
+        FlowStep step; step.type = p.textOcr ? "readOCR" : "readUIA"; step.condition = p.textCondition; step.expected = p.expectedText; step.timeoutMs = 30000;
+        step.name = QString(p.textOcr ? "框選 OCR 文字比對（" : "比對字串（") + QString(p.textCondition.startsWith("contains") ? "包含" : "等於") + "）："
             + (p.expectedText.isEmpty() ? "請填入預期文字" : p.expectedText);
         steps.append(step);
     }
+    if(p.referenceCompare) {FlowStep step;step.type="checkVideo";step.name="確認影片畫面與顏色正常";step.referenceVideo=p.referenceVideo;step.timeoutMs=10000;steps.append(step);}
     return steps;
 }
 QString describeEasyPlan(const EasyPlan &p)
 {
     QStringList lines;
     for (const auto &step : easyPlanSteps(p)) lines << QString::number(lines.size() + 1) + ". " + step.name;
-    return lines.join('\n') + "\n\n加入後，逐項選取步驟，再按「指一下位置」或「框選畫面」。不會立即執行。";
+    return lines.join('\n') + "\n\n等待步驟不需指定目標；畫面與 OCR 項目加入後，請選取步驟並框選區域。參考影片比較：訊號來源須正常速度播放同一短片；本機只讀取參考檔，不必另開播放器。框選完整影片內容並排除黑邊，連續觀察至少 3 秒；靜止或循環切換時可能無法對齊。不會立即執行。";
 }
 bool easyPlanSelfTest()
 {

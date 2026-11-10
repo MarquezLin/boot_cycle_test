@@ -2,8 +2,10 @@
 #include "flow_model.h"
 struct EasyPlan {
     bool running = false, resolution = false, fps = false, content = false, motion = false, audio = false, video = false, clickStart = false;
-    bool textCompare = false;
+    bool textCompare = false, textOcr = false;
     bool delay = false;
+    bool referenceCompare = false;
+    QString referenceVideo;
     int delayMs = 1000;
     QString expectedText, textCondition = "equalsIgnoreCase";
     int width = 1920, height = 1080;

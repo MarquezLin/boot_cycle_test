@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GVFG_BootCycleTest VERSION 1.1.1 LANGUAGES CXX)
+project(GVFG_BootCycleTest VERSION 1.3.2 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "GVFG_BootCycleTest requires Windows.")
@@ -25,8 +25,16 @@ qt_add_executable(GVFG_BootCycleTest WIN32
     source/mainwindow.cpp
     source/mainwindow.h
     source/mainwindow.ui
+    source/flow_monitor.cpp
+    source/flow_monitor.h
+    source/flow_items_dialog.cpp
+    source/flow_items_dialog.h
+    source/app_scanner.cpp
+    source/app_scanner.h
     source/startup_manager.cpp
     source/startup_manager.h
+    source/relay_controller.cpp
+    source/relay_controller.h
     source/BootCycleTest.cpp
     source/boot_flow_runner.cpp
     source/boot_flow_runner.h
@@ -40,6 +48,12 @@ qt_add_executable(GVFG_BootCycleTest WIN32
     source/region_dialog.ui
     source/flow_samples.cpp
     source/flow_samples.h
+    source/offline_capture.cpp
+    source/offline_capture.h
+    source/window_capture.cpp
+    source/window_capture.h
+    source/video_reference.cpp
+    source/video_reference.h
     source/image_checks.cpp
     source/image_checks.h
     source/easy_plan.cpp
@@ -64,7 +78,7 @@ target_compile_options(GVFG_BootCycleTest PRIVATE
 target_link_libraries(GVFG_BootCycleTest PRIVATE
     Qt6::Widgets
     Qt6::Network
-    uiautomationcore ole32 oleaut32 shell32 user32 uuid dwmapi
+    d3d11 dxgi windowsapp mfplat mfreadwrite mfuuid propsys uiautomationcore ole32 oleaut32 shell32 user32 uuid dwmapi
 )
 set_target_properties(GVFG_BootCycleTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
@@ -87,6 +101,19 @@ endforeach()
 set_property(SOURCE source/flow_dialog.cpp APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/source/region_dialog.ui")
 
+# Qt Creator can invoke localized MSVC with an encoding different from Ninja's
+# cached /showIncludes prefix. Keep project-header dependencies explicit so an
+# ABI-changing header can never leave an old runner object linked into a new UI.
+file(GLOB project_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.h")
+get_target_property(project_sources GVFG_BootCycleTest SOURCES)
+foreach(source IN LISTS project_sources)
+    if(source MATCHES "\\.cpp$" AND NOT source MATCHES "^\\$<")
+        set_property(SOURCE "${source}" APPEND PROPERTY OBJECT_DEPENDS ${project_headers})
+    endif()
+endforeach()
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/GVFG_BootCycleTest_autogen/mocs_compilation.cpp"
+    APPEND PROPERTY OBJECT_DEPENDS ${project_headers})
+
 # Install only deployable files, never local settings, markers or test records.
 include(GNUInstallDirs)
 install(TARGETS GVFG_BootCycleTest RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -96,6 +123,8 @@ qt_generate_deploy_app_script(
     NO_TRANSLATIONS
 )
 install(SCRIPT ${deploy_script})
+install(FILES examples/sample_capture_card_test.json DESTINATION examples)
+install(FILES test_media/capture_card_test_1080p60.mp4 DESTINATION test_media)
 install(FILES DISTRIBUTION.md DESTINATION . RENAME README.md)
 install(CODE "if(NOT EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/third_party/ocr/tesseract.exe\")\n message(FATAL_ERROR \"Missing portable OCR runtime: third_party/ocr/tesseract.exe\")\nendif()")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ocr" DESTINATION ${CMAKE_INSTALL_BINDIR})

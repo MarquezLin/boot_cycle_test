@@ -9,6 +9,7 @@
 
 namespace Ui { class MainWindow; }
 class QCloseEvent;
+class FlowMonitor;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -18,16 +19,16 @@ public:
     void startTest(bool dry, bool automatic = false);
     void showExisting();
     bool smokeTest();
+    bool monitorPreview(const QString &state);
 protected:
     void closeEvent(QCloseEvent *event) override;
 private:
     void refreshModeNote();
     bool saveSettings();
-    void browseTarget();
     bool targetAvailable() const;
     bool checkEnvironment();
-    bool importBootFlow(const TestFlow &flow, const QString &sourceName = {});
-    void refreshBootFlowDisplay();
+    bool importBootFlow(const QString &file);
+    void refreshBootFlowDisplay(bool preserveResults = false);
     bool validateBootFlow(QString &error) const;
     void refreshStartup();
     void setRunning(bool running);
@@ -43,11 +44,12 @@ private:
     void finishTest(int exitCode, QProcess::ExitStatus status);
     bool warmMode() const;
     std::unique_ptr<Ui::MainWindow> ui;
+    FlowMonitor *m_flowMonitor = nullptr;
     StartupManager m_startup;
     QProcess m_worker;
     QTimer m_logTimer, m_startupTimer;
     QString m_dir;
-    QString m_bootFlowFile, m_bootFlowName;
+    QString m_bootFlowFile;
     QByteArray m_pending;
     qint64 m_logOffset = 0;
     quint64 m_formalCount = 0, m_dryCount = 0;

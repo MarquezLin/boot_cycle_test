@@ -79,6 +79,12 @@ echo ERROR: Packaging failed. Existing ZIP files may be from an earlier build.
 type "%LOG_FILE%"
 
 :finish
+rem Remove only CPack's staging folder, using native PowerShell path validation.
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $base=[IO.Path]::GetFullPath($env:RELEASE_ROOT).TrimEnd([char]92); $staging=[IO.Path]::GetFullPath([IO.Path]::Combine($base,'_CPack_Packages')); if([IO.Path]::GetDirectoryName($staging) -ne $base){throw 'Unsafe staging path'}; if(Test-Path -LiteralPath $staging){if((Get-Item -LiteralPath $staging -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse staging rejected'}; Remove-Item -LiteralPath $staging -Recurse -Force}" >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo ERROR: Could not remove CPack staging files. See build log.
+    set "RESULT=1"
+)
 echo.
 echo Build log: %LOG_FILE%
 if not "%RESULT%"=="0" echo Packaging did not complete successfully.

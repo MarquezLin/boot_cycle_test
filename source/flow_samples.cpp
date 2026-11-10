@@ -30,13 +30,13 @@ QVector<FlowStep> flowSampleSteps(int index, bool ocr)
     auto fps = [&] {read("確認 FPS 59～61（請只選 FPS 值）", R"((?i)(?:\bfps\s*[:=]?\s*|^\s*)([0-9]+(?:\.[0-9]+)?)(?=\s*(?:fps\b|$)))", "range", "59,61");};
     switch (index) {
     case 0:
-        read("確認 CH0 audio received > 0（請選 audio 狀態）", R"((?i)received\s*[:=]\s*([0-9]+))", "gt", "0"); break;
+        read("確認 CH0 audio received > 0（請選 audio 狀態）", R"((?im)^[ \t]*(?:CH0[ \t]+)?Audio\b[^\r\n]*?\breceived[ \t]*[:=][ \t]*([0-9]+))", "gt", "0"); break;
     case 1: running(); break;
     case 2: resolution(); break;
     case 3: fps(); break;
     case 4: running(); resolution(); fps(); break;
     case 5:
-        read("確認 video received frames > 0（請選 video 計數）", R"((?i)(?:received|frames)\s*[:=]\s*([0-9]+))", "gt", "0"); break;
+        read("確認 video received frames > 0（請選 video 計數）", R"((?im)^[ \t]*(?:CH[0-9]+[ \t]+)?Video\b[^\r\n]*?\b(?:received|frames)[ \t]*[:=][ \t]*([0-9]+))", "gt", "0"); break;
     case 6: case 7: {
         FlowStep step; step.type = "checkImage"; step.name = index == 6 ? "預覽區有畫面內容（請框選預覽內部）" : "預覽區畫面有變化（請框選預覽內部）";
         step.condition = index == 6 ? "contrast" : "change"; step.expected = index == 6 ? "8" : "2"; step.timeoutMs = 10000;
@@ -49,6 +49,12 @@ QVector<FlowStep> flowSampleSteps(int index, bool ocr)
 bool flowSamplesSelfTest()
 {
     QString parsed, error;
+    const QRegularExpression audio(flowSampleSteps(0, false).first().text);
+    const QRegularExpression video(flowSampleSteps(5, false).first().text);
+    const QString sharedStatus = "CH0 Video | received=64 frames\nCH0 Audio | 48000 Hz | received=0 frames";
+    if (audio.match(sharedStatus).captured(1) != "0" || video.match(sharedStatus).captured(1) != "64"
+        || audio.match("CH0 Audio\nCH0 Video | received=64 frames").hasMatch()
+        || video.match("CH0 Audio | received=32 frames").hasMatch()) return false;
     const auto running = flowSampleSteps(1, false).first();
     for (const auto &bad : QStringList{"Not Running", "Running=false", "Running: false", "Stopped", "Idle"})
         if (evaluateFlowValue(bad, running.condition, running.expected, parsed, error)) return false;

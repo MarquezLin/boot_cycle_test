@@ -4,9 +4,15 @@
 #include <uiautomation.h>
 #include <dwmapi.h>
 #include "flow_runner.h"
+#include "video_reference.h"
+#include "window_capture.h"
+#include "offline_capture.h"
 #include "image_checks.h"
 #include "ocr_reader.h"
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -169,7 +175,7 @@ QPoint flowClientPoint(quintptr handle, const QPoint &screenPoint)
     if (!ScreenToClient(reinterpret_cast<HWND>(handle), &point)) return QPoint(-1, -1);
     return QPoint(point.x, point.y);
 }
-QImage captureFlowWindow(quintptr handle, QString &error)
+QImage captureDesktopWindow(quintptr handle, QString &error)
 {
     const HWND window = reinterpret_cast<HWND>(handle);
     if (!foreground(window, error)) return {};
@@ -227,6 +233,14 @@ QImage captureFlowWindow(quintptr handle, QString &error)
     if (image.isNull()) error = "擷取視窗失敗";
     return image;
 }
+QImage captureFlowWindow(quintptr handle,QString &error)
+{
+    const HRESULT initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    QImage image;
+    {WindowCapture capture;image=capture.next(handle,error);}
+    if(SUCCEEDED(initialized))CoUninitialize();
+    return image;
+}
 bool pickFlowControl(quintptr handle, int x, int y, QString &name, QString &id, QString &error)
 {
     const auto point = flowClientPoint(handle, QPoint(x, y)); RECT bounds{};
@@ -267,7 +281,38 @@ void FlowRunner::run()
             emit stepStarted(index);
             emit progress(QString("步驟 %1：%2 — %3").arg(index + 1).arg(flowTypeName(s.type), s.name));
             QElapsedTimer timer; timer.start(); bool ok = false;
-            QImage baseline; qint64 baselineTime = 0; int imageSamples = 0;
+            WindowCapture backgroundCapture;
+            bool capturePrepared=false;
+            auto prepareCapture=[&](QString &problem){
+                if(capturePrepared)return true;
+                if(s.activateBeforeCapture || s.captureMode=="desktop"){
+                    emit stepObserved(index,"擷取準備：依腳本啟用預覽視窗「"+s.windowTitle+"」…");
+                    if(!foreground(window,problem)){problem="擷取尚未開始："+problem+"；目標視窗："+s.windowTitle;return false;}
+                    for(int wait=0;wait<15 && !m_stop;++wait)msleep(10);
+                    if(m_stop)return false;
+                    emit progress("Capture activation: verified actual preview; backend="+s.captureMode+"; title="+s.windowTitle);
+                }else emit progress("Capture activation: disabled by script; background capture without focus change; title="+s.windowTitle);
+                capturePrepared=true;return true;
+            };
+            auto capture=[&](QString &problem){
+                if(!prepareCapture(problem))return QImage();
+                return s.captureMode=="desktop"?captureDesktopWindow(reinterpret_cast<quintptr>(window),problem)
+                    :backgroundCapture.next(reinterpret_cast<quintptr>(window),problem,&m_stop);
+            };
+            if(s.type=="checkImage" || s.type=="checkVideo") {
+                window=reinterpret_cast<HWND>(findFlowWindow(flow.executable,pid,s.windowTitle));
+                bool ready=true;
+                if(replayCaptureFile.isEmpty()){
+                    if(!window){error=flowWindowError(flow.executable,pid,s.windowTitle);ready=false;}
+                    else ready=prepareCapture(error);
+                }
+                if(ready)ok=offlineImageStep(s,evidenceDirectory+QString("/step_%1").arg(index+1),replayCaptureFile,capture,
+                    [this,index](const QString &message){emit stepObserved(index,message);},m_stop,detail,error);
+                emit stepFinished(index,m_stop?"STOP":ok?"PASS":"FAIL",ok?detail:error+"\n"+detail);
+                emit progress((m_stop?"STOP: ":ok?"PASS: ":"FAIL: ")+(ok?detail:error));
+                if(m_stop || !ok){success=false;break;}
+                continue;
+            }
             do {
                 error.clear();
                 if (s.type == "launch") {
@@ -297,7 +342,7 @@ void FlowRunner::run()
                     window = reinterpret_cast<HWND>(findFlowWindow(flow.executable, pid, s.windowTitle));
                     if (!window && s.type != "clickUIA" && s.type != "readUIA") {
                         error = flowWindowError(flow.executable, pid, s.windowTitle);
-                        if ((s.type == "readOCR" || s.type == "checkImage") && timer.elapsed() < s.timeoutMs) {
+                        if ((s.type == "readOCR" || s.type == "checkImage" || s.type == "checkVideo") && timer.elapsed() < s.timeoutMs) {
                             emit stepObserved(index, "等待待測視窗出現：" + s.windowTitle);
                             msleep(100); continue;
                         }
@@ -328,13 +373,13 @@ void FlowRunner::run()
                         if (element) {
                             if (s.type == "clickUIA") {
                                 IUIAutomationInvokePattern *invokeRaw = nullptr;
-                                if (SUCCEEDED(element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&invokeRaw)))) {
+                                if (SUCCEEDED(element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&invokeRaw))) && invokeRaw) {
                                     Com<IUIAutomationInvokePattern> invoke(invokeRaw); ok = SUCCEEDED(invoke->Invoke());
                                 }
                                 if (!ok) error = "控制項不支援 Invoke 或點擊失敗，請改用位置點擊";
                             } else {
                                 IUIAutomationValuePattern *valueRaw = nullptr; BSTR text = nullptr;
-                                if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&valueRaw)))) {
+                                if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&valueRaw))) && valueRaw) {
                                     Com<IUIAutomationValuePattern> pattern(valueRaw); ok = SUCCEEDED(pattern->get_CurrentValue(&text));
                                 } else ok = SUCCEEDED(element->get_CurrentName(&text));
                                 value = bstrText(text); hasValue = ok; detail = value;
@@ -354,7 +399,7 @@ void FlowRunner::run()
                         }
                     } else if (s.type == "typeText" || s.type == "hotkey") ok = keyboard(window, s.text, s.type == "hotkey", error);
                     else if (s.type == "readOCR") {
-                        const auto image = captureFlowWindow(reinterpret_cast<quintptr>(window), error);
+                        const auto image = capture(error);
                         if (image.isNull()) {
                             emit stepObserved(index, error);
                             if (timer.elapsed() >= s.timeoutMs) break;
@@ -378,38 +423,6 @@ void FlowRunner::run()
                             value = QString::fromUtf8(ocr.readAllStandardOutput()).trimmed(); hasValue = !value.isEmpty(); ok = hasValue;
                             detail = value; if (!ok) error = "OCR 未辨識出文字";
                         }
-                    } else if (s.type == "checkImage") {
-                        const int sampleInterval = 500 + 137 * (qMax(0, imageSamples - 1) % 4);
-                        if (!baseline.isNull() && timer.elapsed() - baselineTime < sampleInterval) {
-                            error = "等待下一張預覽畫面；" + detail;
-                        } else {
-                            const auto full = captureFlowWindow(reinterpret_cast<quintptr>(window), error);
-                            if (full.isNull()) {
-                                emit stepObserved(index, error);
-                                if (timer.elapsed() >= s.timeoutMs) break;
-                                msleep(100); continue;
-                            }
-                            if (!full.rect().contains(s.region)) {error = "影像區域超出目前視窗，請重新框選"; break;}
-                            const auto image = full.copy(s.region);
-                            if (!image.save(evidenceDirectory + QString("/step_%1.png").arg(index + 1))) {error = "無法保存影像檢查截圖"; break;}
-                            const double contrast = imageContrast(image), threshold = s.expected.toDouble();
-                            const double difference = baseline.isNull() ? -1 : imageDifference(baseline, image);
-                            if (!baseline.isNull() && !baseline.save(evidenceDirectory + QString("/step_%1_before.png").arg(index + 1))) {
-                                error = "無法保存比較前的截圖"; break;
-                            }
-                            if (s.condition == "contrast") {
-                                // Uniform test patterns can have valid content across time.
-                                ok = contrast >= threshold || difference >= threshold;
-                                detail = QString("亮度標準差=%1；前後平均 RGB 差異=%2；任一 ≥ %3 算有畫面證據")
-                                    .arg(contrast, 0, 'f', 2).arg(difference < 0 ? "尚待第二張" : QString::number(difference, 'f', 2)).arg(threshold);
-                            } else if (s.condition == "change") {
-                                ok = difference >= threshold;
-                                detail = difference < 0 ? "已取得第一張畫面，等待至少 500 ms"
-                                    : QString("畫面平均 RGB 差異=%1；門檻=%2（允許純黑／純白互換）").arg(difference, 0, 'f', 2).arg(threshold);
-                            } else {error = "不支援的影像檢查條件"; break;}
-                            baseline = image; baselineTime = timer.elapsed(); ++imageSamples;
-                            if (!ok) error = "影像條件未符合：" + detail;
-                        }
                     } else if (s.type == "assert") {
                         if (!hasValue) error = "尚未取得讀取值，請先執行讀取步驟";
                         else {
@@ -421,30 +434,39 @@ void FlowRunner::run()
                 }
                 if (ok && (s.type == "readUIA" || s.type == "readOCR")) {
                     const QString rawValue = value;
-                    emit stepObserved(index, "目前讀到：" + (rawValue.isEmpty() ? "（空字串）" : rawValue) + "；預期：" + s.expected);
+                    bool extracted = true;QString comparedValue;
                     if (!s.text.isEmpty()) {
-                        const auto match = QRegularExpression(s.text).match(value);
-                        if (!match.hasMatch() || match.lastCapturedIndex() < 1) {error = "擷取正規式未取得第一個括號群組"; ok = false;}
-                        else value = match.captured(1);
+                        auto matches = QRegularExpression(s.text).globalMatch(value);
+                        if (!matches.hasNext()) {error = "擷取正規式未取得第一個括號群組"; ok = false;extracted=false;}
+                        else {
+                            const auto match = matches.next();
+                            if (match.lastCapturedIndex() < 1 || matches.hasNext()) {error = "擷取結果不唯一或缺少數字群組；請縮小讀取範圍"; ok = false;extracted=false;}
+                            else value = match.captured(1);
+                        }
                     }
                     if (ok && !s.expected.isEmpty()) {
-                        QString parsed; ok = evaluateFlowValue(value, s.condition, s.expected, parsed, error);
+                        ok = evaluateFlowValue(value, s.condition, s.expected, comparedValue, error);
                         if (!ok && error.isEmpty()) error = "讀取值尚未符合條件：" + (value.isEmpty() ? "（空字串）" : value) + "；預期：" + s.expected;
                     }
                     hasValue = ok;
-                    detail = "原始值：" + rawValue + "；讀取值：" + value;
+                    QString shown=extracted?(comparedValue.isEmpty()?value:comparedValue):QString("未能唯一擷取");shown.replace('\n'," ⏎ ");
+                    detail = "讀取值："+(shown.isEmpty()?QString("（空字串）"):shown.left(120))
+                        +" ｜ "+flowCheckSummary(s)+" ｜ "+(ok?QString(s.expected.isEmpty()?"已讀取":"PASS"):QString("尚未符合"))
+                        +"\n"+(error.isEmpty()?QString():"原因："+error+"\n")+"原始文字：\n"+rawValue;
+                    emit stepObserved(index, detail);
                 }
                 // Only discovery/read steps are retried. Actions execute once.
-                if (ok || (s.type != "waitWindow" && s.type != "readUIA" && s.type != "readOCR" && s.type != "checkImage") || timer.elapsed() >= s.timeoutMs) break;
-                msleep(100);
+                if (ok || (s.type != "waitWindow" && s.type != "readUIA" && s.type != "readOCR" && s.type != "checkImage" && s.type != "checkVideo") || timer.elapsed() >= s.timeoutMs) break;
+                msleep(s.type=="checkVideo" || s.type=="checkImage"?1:100);
             } while (!m_stop);
             if (m_stop) {emit stepFinished(index, "STOP", detail); break;}
             if (ok && (s.type == "readUIA" || s.type == "readOCR")) emit valueRead(value);
-            emit stepFinished(index, ok ? "PASS" : "FAIL", ok ? detail : error + (detail.isEmpty() ? QString() : "；" + detail));
+            const bool readStep=s.type=="readUIA" || s.type=="readOCR";
+            emit stepFinished(index, ok ? "PASS" : "FAIL", ok || (readStep && !detail.isEmpty()) ? detail : error + (detail.isEmpty() ? QString() : "；" + detail));
             emit progress((ok ? "PASS: " : "FAIL: ") + (ok ? detail : error));
             if (!ok) {
                 QString screenshotError;
-                const auto image = captureFlowWindow(reinterpret_cast<quintptr>(window), screenshotError);
+                const auto image = capture(screenshotError);
                 if (!image.isNull()) image.save(evidenceDirectory + "/failure.png");
                 success = false; break;
             }

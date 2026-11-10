@@ -13,4 +13,6 @@ public:
 private:
     void refresh();
     std::unique_ptr<Ui::EasyBuilder> ui;
+    class QCheckBox *m_referenceCheck;
+    class QLineEdit *m_referencePath;
 };

@@ -1,16 +1,14 @@
-# 新電腦發布檢查（2026-10-15）
+# 發布檢查（2026-11-10）
 
-交付：release/GVFG_BootCycleTest-1.1.1-Windows-x64.zip（136,848,998 bytes，約 131 MiB）。
-完整解壓後執行 bin/GVFG_BootCycleTest.exe。
+已執行 `package_release.bat /nopause`，Release 建置及 ZIP 打包成功。
 
-已包含工具、Qt DLL／plugins、qt.conf、官方 VC++ x64 runtime 安裝程式、Tesseract 5.4.0.20240606 引擎與相依 DLL、英文／繁體中文語言資料及授權說明。可離線執行，不需 Qt Creator 或額外辨識服務。VC++ runtime 尚未安裝的電腦請執行 bin/vc_redist.x64.exe。
+- 套件：`release/GVFG_BootCycleTest-1.3.2-Windows-x64.zip`
+- 大小：139,706,916 bytes；108 個 ZIP 項目。
+- 入口：完整解壓後執行 `bin/GVFG_BootCycleTest.exe`。
+- 範例：`examples/sample_capture_card_test.json`，待測 EXE 留空供現場選擇。
+- 影片：`test_media/capture_card_test_1080p60.mp4`；已確認範例的相對路徑可解析，且套件影片與來源 SHA-256 相同。
+- 已確認 `_CPack_Packages` 與解壓驗證副本均已清除；ZIP 不含個人設定與試跑資料。
 
-從實際 ZIP 解壓，將程序 PATH 限縮至 Windows 系統目錄並清空 Qt plugin 環境變數後，建立測試項目的 UI 預覽、流程自我檢查、文字辨識自我檢查均 exit 0。辨識的 Running、Not Running、繁體「執行中」均通過；報告的引擎路徑確認位於解壓後套件的 bin/ocr，而不是本機安裝目錄。
+從實際 ZIP 解壓，限制 PATH 為 Windows 系統目錄、清除 Qt plugin 環境變數後，14 項流程模型、離線擷取、影片比對、掃描器、分類、編輯、插入、繼電器協定、UI、流程事件、數值讀取、補充步驟及 OCR 測試全數 exit 0。驗證紀錄位於可重新產生的 `build/package_validation.json`。
 
-ZIP 共 104 個項目。檢查未包含個人設定、STOP／FAILED、匯入快照或測試紀錄。套件檢查及 SHA-256 在 build/portable_package_check.json；解壓測試位置在 build/portable_check_path.txt。
-
-跨電腦仍須準備待測 APP、其相依元件與驅動、擷取硬體及訊號來源。匯入 JSON 時調整待測 EXE 與工作目錄，並確認控制項、視窗布局、DPI 與框選區域。舊流程的 OCR 引擎路徑若不存在，會自動尋找套件內引擎。
-
-先試跑（不關機），成功後再安裝目前使用者的登入自動啟動並正式測試。搬移工具後請更新自動啟動。冷開機的外部 UART 電源控制尚未完成。
-
-上述是本機解壓隔離測試；尚未在未安裝任何開發工具的 Windows／VM 上測試，也未執行實際冷／暖開機或硬體循環。第三方元件的來源與授權資訊位於 distribution/licenses，並隨 ZIP 一起發布。
+以上為本機解壓隔離及合成／UI 測試；未在全新 Windows／VM 驗證，也未執行實體繼電器切換、斷電、重開機或擷取硬體循環。不同 APP 的背景繪圖、實際訊號品質與前景相容需求仍須現場試跑確認。

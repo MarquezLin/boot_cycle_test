@@ -10,6 +10,7 @@ quintptr findFlowWindow(const QString &executable, quint32 pid = 0, const QStrin
 QString flowWindowError(const QString &executable, quint32 pid = 0, const QString &title = {});
 void requestFlowForeground(quintptr window);
 quintptr flowWindowAtPoint(const QString &executable, const QPoint &point);
+QImage captureDesktopWindow(quintptr window, QString &error);
 QImage captureFlowWindow(quintptr window, QString &error);
 bool pickFlowControl(quintptr window, int screenX, int screenY, QString &name, QString &id, QString &error);
 QPoint flowClientPoint(quintptr window, const QPoint &screenPoint);
@@ -20,7 +21,7 @@ public:
     explicit FlowRunner(QObject *parent = nullptr) : QThread(parent) {}
     TestFlow flow;
     int singleStep = -1;
-    QString initialValue, evidenceDirectory;
+    QString initialValue, evidenceDirectory, replayCaptureFile;
     void stop() { m_stop = true; }
 signals:
     void progress(const QString &line);

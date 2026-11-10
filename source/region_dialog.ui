@@ -5,6 +5,7 @@
  <layout class="QVBoxLayout" name="layout" stretch="0,0,1,0">
   <item><widget class="QLabel" name="hintLabel"><property name="text"><string>在截圖上拖曳框選。OCR 使用整個框；位置點擊使用框的中心。先確認截圖確實是待測 APP。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
   <item><layout class="QHBoxLayout" name="zoomLayout">
+   <item><widget class="QPushButton" name="wholeImageButton"><property name="text"><string>使用整個畫面</string></property><property name="toolTip"><string>選取待測 APP 的整個視窗內容並確認，不包含桌面。</string></property></widget></item>
    <item><widget class="QPushButton" name="zoomOutButton"><property name="text"><string>縮小 −</string></property></widget></item>
    <item><widget class="QPushButton" name="zoomInButton"><property name="text"><string>放大 ＋</string></property></widget></item>
    <item><widget class="QPushButton" name="actualButton"><property name="text"><string>100% 原始大小</string></property></widget></item>
