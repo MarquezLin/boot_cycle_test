@@ -27,6 +27,7 @@
      <item><widget class="QPushButton" name="dryButton"><property name="minimumHeight"><number>42</number></property><property name="text"><string>試跑 · 不關機</string></property></widget></item>
      <item><widget class="QPushButton" name="runButton"><property name="minimumHeight"><number>42</number></property><property name="text"><string>開始正式測試</string></property></widget></item>
      <item><widget class="QPushButton" name="stopButton"><property name="minimumHeight"><number>42</number></property><property name="text"><string>停止測試</string></property><property name="enabled"><bool>false</bool></property></widget></item>
+     <item><widget class="QPushButton" name="exportReportButton"><property name="minimumHeight"><number>42</number></property><property name="text"><string>測試報告…</string></property><property name="enabled"><bool>false</bool></property></widget></item>
     </layout></item>
     <item><widget class="QSplitter" name="workspaceSplitter"><property name="orientation"><enum>Qt::Horizontal</enum></property>
      <widget class="QFrame" name="monitorPanel"><layout class="QVBoxLayout" name="monitorLayout"><property name="leftMargin"><number>0</number></property><property name="rightMargin"><number>8</number></property><property name="topMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout></widget>
@@ -41,7 +42,7 @@
          <item><widget class="QGroupBox" name="targetGroup"><property name="title"><string>待測 APP</string></property><layout class="QVBoxLayout" name="targetLayout"><item><widget class="QLineEdit" name="targetPathEdit"><property name="readOnly"><bool>true</bool></property><property name="placeholderText"><string>由 JSON 指定</string></property></widget></item></layout></widget></item>
          <item><widget class="QGroupBox" name="modeGroup"><property name="title"><string>02  循環方式</string></property><layout class="QVBoxLayout" name="modeSettingsLayout">
           <item><widget class="QComboBox" name="bootModeCombo"><item><property name="text"><string>冷開機（外部斷電）</string></property></item><item><property name="text"><string>暖重開機（Windows 重啟）</string></property></item></widget></item>
-          <item><widget class="QPushButton" name="relayButton"><property name="text"><string>RS485 電源設定…</string></property></widget></item>
+          <item><widget class="QPushButton" name="relayButton"><property name="text"><string>控制端 連線設定…</string></property></widget></item>
           <item><layout class="QHBoxLayout" name="cycleLimitLayout"><item><widget class="QLabel" name="cycleLimitLabel"><property name="text"><string>正式測試輪數</string></property></widget></item><item><widget class="QSpinBox" name="cycleLimitSpin"><property name="maximum"><number>999999</number></property><property name="specialValueText"><string>不限</string></property></widget></item></layout></item>
           <item><widget class="QCheckBox" name="continueOnFailureCheck"><property name="text"><string>檢查失敗後，仍繼續下一輪</string></property><property name="toolTip"><string>檢查失敗仍記錄 FAIL；手動停止與電源控制失敗會停止。</string></property></widget></item>
           <item><widget class="QLabel" name="modeNote"><property name="text"><string>依所選模式執行。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
@@ -57,11 +58,14 @@
       <widget class="QWidget" name="logTab"><attribute name="title"><string>詳細紀錄</string></attribute><layout class="QVBoxLayout" name="logLayout">
        <item><widget class="QPlainTextEdit" name="logEdit"><property name="readOnly"><bool>true</bool></property><property name="maximumBlockCount"><number>3000</number></property><property name="placeholderText"><string>保留最近 3000 行原始紀錄。</string></property></widget></item>
        <item><widget class="QPushButton" name="folderButton"><property name="text"><string>開啟紀錄資料夾</string></property></widget></item>
-       <item><widget class="QPushButton" name="clearButton"><property name="text"><string>清除測試紀錄…</string></property></widget></item>
+       <item><widget class="QPushButton" name="clearButton"><property name="text"><string>管理報告暫存…</string></property></widget></item>
       </layout></widget>
      </widget>
     </widget></item>
-    <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次</string></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string>color: #64748b; padding-top: 4px;</string></property></widget></item>
+    <item><layout class="QHBoxLayout" name="statisticsLayout">
+     <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次</string></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string>color: #64748b; padding-top: 4px;</string></property></widget></item>
+     <item><widget class="QPushButton" name="resetStatisticsButton"><property name="text"><string>重設累計次數…</string></property></widget></item>
+    </layout></item>
    </layout>
   </widget>
  </widget>

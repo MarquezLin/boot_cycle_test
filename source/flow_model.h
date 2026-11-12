@@ -15,6 +15,7 @@ struct FlowStep {
     QString captureMode = "window";
     int sampleFps = 30;
     int captureDurationMs = 10000;
+    int ignoreVideoBottomPercent = 0;
     bool activateBeforeCapture = true;
 };
 struct FlowTestItem {
@@ -26,10 +27,12 @@ struct TestFlow {
     QVector<FlowStep> steps;
     QString name, version;
     QVector<FlowTestItem> testItems;
+    int formalCycleLimit = -1; // Legacy JSON without a limit uses the local setting.
 };
 bool validateFlowItems(const TestFlow &flow, QString &error);
 bool saveFlow(const QString &path, const TestFlow &flow, QString &error);
 bool loadFlow(const QString &path, TestFlow &flow, QString &error);
+bool saveFlowCycleLimit(const QString &path, int limit, QString &error);
 bool validateFlow(const TestFlow &flow, QString &error, int singleStep = -1, bool hasRead = false);
 bool evaluateFlowValue(const QString &raw, const QString &condition, const QString &expected,
                        QString &parsed, QString &error);

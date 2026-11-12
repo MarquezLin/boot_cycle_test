@@ -10,7 +10,7 @@ class QPlainTextEdit;
 class QTableWidget;
 class QLabel;
 class QPushButton;
-class QThread;
+class QProcess;
 class QCloseEvent;
 
 struct AppControl {
@@ -24,6 +24,8 @@ struct AppScanResult {
     QString error;
 };
 AppScanResult scanAppControls(quintptr window, const std::atomic_bool &cancel);
+int runAppScannerWorker(quintptr window);
+AppScanResult readAppScanResult(const QByteArray &data);
 bool appScannerSelfTest();
 
 class AppScannerDialog final : public QDialog {
@@ -57,8 +59,8 @@ private:
     QLabel *m_status,*m_binding;
     QLabel *m_numberLabel,*m_expectedLabel,*m_preview;
     QPushButton *m_scan,*m_refresh,*m_generate;
-    std::unique_ptr<QThread> m_worker;
-    std::shared_ptr<std::atomic_bool> m_cancel;
+    QProcess *m_worker = nullptr;
+    QString m_scanError;
     int m_selected=-1;
     bool m_loading=false,m_busy=false;
 };

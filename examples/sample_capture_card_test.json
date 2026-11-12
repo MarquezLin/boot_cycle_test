@@ -1,6 +1,6 @@
 {
     "arguments": "",
-    "executable": "",
+    "executable": "../dut/GVFG_Customer_Sample_Release_1.0.2_20261110/gvfg_qt_preview.exe",
     "name": "gvfg_qt_preview 自動化測試",
     "ocrExecutable": "",
     "ocrLanguage": "eng",
@@ -339,5 +339,5 @@
         }
     ],
     "version": "",
-    "workingDirectory": ""
+    "workingDirectory": "../dut/GVFG_Customer_Sample_Release_1.0.2_20261110"
 }

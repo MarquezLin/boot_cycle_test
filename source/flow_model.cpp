@@ -95,19 +95,43 @@ QVector<FlowNumberField> flowNumberFields(const QString &raw)
 bool saveFlow(const QString &path, const TestFlow &flow, QString &error)
 {
     if (!validateFlowItems(flow, error)) return false;
+    const QDir scriptDirectory(QFileInfo(path).absolutePath());
+    const auto portablePath=[&](const QString &value){return value.isEmpty() || QFileInfo(value).isRelative()?value:scriptDirectory.relativeFilePath(value);};
     QJsonArray steps;
     for (const auto &s : flow.steps) steps.append(QJsonObject{{"type", s.type}, {"name", s.name}, {"selector", s.selector},
         {"automationId", s.automationId}, {"text", s.text}, {"condition", s.condition}, {"expected", s.expected}, {"windowTitle", s.windowTitle},
-        {"timeoutMs", s.timeoutMs}, {"x", s.region.x()}, {"y", s.region.y()}, {"width", s.region.width()}, {"height", s.region.height()}, {"testItemId", s.testItemId}, {"valueLabel",s.valueLabel}, {"referenceVideo",s.referenceVideo},{"captureMode",s.captureMode},{"sampleFps",s.sampleFps},{"captureDurationMs",s.captureDurationMs},{"activateBeforeCapture",s.activateBeforeCapture}});
+        {"timeoutMs", s.timeoutMs}, {"x", s.region.x()}, {"y", s.region.y()}, {"width", s.region.width()}, {"height", s.region.height()}, {"testItemId", s.testItemId}, {"valueLabel",s.valueLabel}, {"referenceVideo",portablePath(s.referenceVideo)},{"captureMode",s.captureMode},{"sampleFps",s.sampleFps},{"captureDurationMs",s.captureDurationMs},{"activateBeforeCapture",s.activateBeforeCapture},{"ignoreVideoBottomPercent",s.ignoreVideoBottomPercent}});
     QJsonArray items;
     for (const auto &item : flow.testItems) items.append(QJsonObject{{"id", item.id}, {"name", item.name},
         {"instruction", item.instruction}, {"runningText", item.runningText}, {"failureHint", item.failureHint}});
-    QJsonObject root{{"schemaVersion", 1}, {"executable", flow.executable}, {"arguments", flow.arguments},
-        {"workingDirectory", flow.workingDirectory}, {"ocrExecutable", flow.ocrExecutable}, {"ocrLanguage", flow.ocrLanguage}, {"reuseExisting", flow.reuseExisting}, {"steps", steps},
+    QJsonObject root{{"schemaVersion", 1}, {"executable", portablePath(flow.executable)}, {"arguments", flow.arguments},
+        {"workingDirectory", portablePath(flow.workingDirectory)}, {"ocrExecutable", portablePath(flow.ocrExecutable)}, {"ocrLanguage", flow.ocrLanguage}, {"reuseExisting", flow.reuseExisting}, {"steps", steps},
         {"name", flow.name}, {"version", flow.version}, {"testItems", items}};
+    if (flow.formalCycleLimit >= 0) root.insert("formalCycleLimit", flow.formalCycleLimit);
     QSaveFile file(path);
     const auto data = QJsonDocument(root).toJson();
     if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {error = file.errorString(); return false;}
+    return true;
+}
+
+bool saveFlowCycleLimit(const QString &path, int limit, QString &error)
+{
+    QFile input(path);
+    if (!input.open(QIODevice::ReadOnly)) { error = input.errorString(); return false; }
+    auto root = QJsonDocument::fromJson(input.readAll()).object();
+    input.close();
+    if (root.value("schemaVersion").toInt() != 1 || !root.value("steps").isArray()
+        || limit < 0 || limit > 999999) {
+        error = "流程格式或正式測試輪數無效";
+        return false;
+    }
+    root.insert("formalCycleLimit", limit);
+    QSaveFile output(path);
+    const QByteArray data = QJsonDocument(root).toJson();
+    if (!output.open(QIODevice::WriteOnly) || output.write(data) != data.size() || !output.commit()) {
+        error = output.errorString();
+        return false;
+    }
     return true;
 }
 bool loadFlow(const QString &path, TestFlow &flow, QString &error)
@@ -120,6 +144,13 @@ bool loadFlow(const QString &path, TestFlow &flow, QString &error)
     if (parse.error != QJsonParseError::NoError || !document.isObject() || root.value("schemaVersion").toInt() != 1
         || !root.value("steps").isArray()) {error = "不是支援的流程 JSON（schemaVersion=1）"; return false;}
     TestFlow loaded;
+    if (root.contains("formalCycleLimit")) {
+        loaded.formalCycleLimit = root.value("formalCycleLimit").toInt(-1);
+        if (loaded.formalCycleLimit < 0 || loaded.formalCycleLimit > 999999) {
+            error = "formalCycleLimit 須為 0～999999 的整數（0 為不限）";
+            return false;
+        }
+    }
     loaded.name = root.value("name").toString(); loaded.version = root.value("version").toString();
     if (root.contains("testItems") && !root.value("testItems").isArray()) {error = "testItems 須為測試項目陣列"; return false;}
     for (const auto &value : root.value("testItems").toArray()) {
@@ -129,6 +160,9 @@ bool loadFlow(const QString &path, TestFlow &flow, QString &error)
     }
     loaded.executable = root.value("executable").toString(); loaded.arguments = root.value("arguments").toString();
     loaded.workingDirectory = root.value("workingDirectory").toString(); loaded.ocrExecutable = root.value("ocrExecutable").toString();
+    const QDir scriptDirectory(QFileInfo(path).absolutePath());
+    const auto resolvePath=[&](const QString &value){return value.isEmpty() || QFileInfo(value).isAbsolute()?value:QDir::cleanPath(scriptDirectory.absoluteFilePath(value));};
+    loaded.executable=resolvePath(loaded.executable);loaded.workingDirectory=resolvePath(loaded.workingDirectory);loaded.ocrExecutable=resolvePath(loaded.ocrExecutable);
     loaded.ocrLanguage = root.value("ocrLanguage").toString("eng");
     loaded.reuseExisting = root.value("reuseExisting").toBool(true);
     for (const auto value : root.value("steps").toArray()) {
@@ -141,6 +175,11 @@ bool loadFlow(const QString &path, TestFlow &flow, QString &error)
         s.valueLabel = o.value("valueLabel").toString();
         s.referenceVideo = o.value("referenceVideo").toString();
         s.captureMode=o.value("captureMode").toString("window");s.sampleFps=o.value("sampleFps").toInt(30);s.captureDurationMs=o.value("captureDurationMs").toInt(10000);s.activateBeforeCapture=o.value("activateBeforeCapture").toBool(true);
+        s.ignoreVideoBottomPercent = o.contains("ignoreVideoBottomPercent") ? o.value("ignoreVideoBottomPercent").toInt(-1) : 0;
+        if (s.ignoreVideoBottomPercent < 0 || s.ignoreVideoBottomPercent > 40) {
+            error = "ignoreVideoBottomPercent 須為 0～40 的整數";
+            return false;
+        }
         if (!s.referenceVideo.isEmpty() && QFileInfo(s.referenceVideo).isRelative()) s.referenceVideo = QFileInfo(path).dir().absoluteFilePath(s.referenceVideo);
         s.region = QRect(o.value("x").toInt(), o.value("y").toInt(), o.value("width").toInt(), o.value("height").toInt());
         loaded.steps.append(s);
@@ -287,6 +326,15 @@ bool flowModelSelfTest()
     QFile legacyOutput(dir.path()+"/legacy.json");if(!legacyOutput.open(QIODevice::WriteOnly))return false;
     legacyOutput.write(QJsonDocument(legacyRoot).toJson());legacyOutput.close();TestFlow legacyActivation;
     if(!loadFlow(dir.path()+"/legacy.json",legacyActivation,error) || !legacyActivation.steps[0].activateBeforeCapture)return false;
+    const QString oldBundle=dir.path()+"/old bundle",newBundle=dir.path()+"/new bundle";
+    for(const auto &base:{oldBundle,newBundle}){QDir().mkpath(base+"/examples");QDir().mkpath(base+"/app");QDir().mkpath(base+"/test_media");}
+    TestFlow portable;portable.executable=oldBundle+"/app/target.exe";portable.workingDirectory=oldBundle+"/app";
+    FlowStep media;media.type="checkVideo";media.referenceVideo=oldBundle+"/test_media/reference.mp4";portable.steps={media};
+    for(const auto &base:{oldBundle,newBundle})for(const auto &asset:{QString("/app/target.exe"),QString("/test_media/reference.mp4")}){QFile file(base+asset);if(!file.open(QIODevice::WriteOnly))return false;file.write("fixture");}
+    if(!saveFlow(oldBundle+"/examples/test.json",portable,error) || !QFile::copy(oldBundle+"/examples/test.json",newBundle+"/examples/test.json"))return false;
+    TestFlow relocated;if(!loadFlow(newBundle+"/examples/test.json",relocated,error)
+       || relocated.executable!=newBundle+"/app/target.exe" || relocated.workingDirectory!=newBundle+"/app"
+       || QFileInfo(relocated.steps[0].referenceVideo).canonicalFilePath()!=newBundle+"/test_media/reference.mp4")return false;
     TestFlow check;
     check.executable = dir.path() + "/target.exe";
     QFile target(check.executable); if (!target.open(QIODevice::WriteOnly)) return false; target.close();

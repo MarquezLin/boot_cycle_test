@@ -54,12 +54,19 @@ static bool scannerFixtureSelfTest()
     auto *state=new QLineEdit("Stopped",&fixture);state->setObjectName("scannerState");state->setReadOnly(true);layout->addWidget(state);
     int clicks=0;QObject::connect(button,&QPushButton::clicked,&fixture,[&]{++clicks;});
     fixture.show();QApplication::processEvents();
-    AppScanResult result;std::atomic_bool cancel=false;
     const quintptr handle=static_cast<quintptr>(fixture.winId());
-    std::unique_ptr<QThread> thread(QThread::create([&]{result=scanAppControls(handle,cancel);}));
-    QEventLoop loop;QObject::connect(thread.get(),&QThread::finished,&loop,&QEventLoop::quit);
-    QTimer deadline;deadline.setSingleShot(true);QObject::connect(&deadline,&QTimer::timeout,&loop,[&]{cancel=true;loop.quit();});
-    deadline.start(20000);thread->start();loop.exec();thread->wait();
+    QProcess worker;
+    QEventLoop loop;
+    QObject::connect(&worker, &QProcess::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&worker, &QProcess::errorOccurred, &loop, [&](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) loop.quit();
+    });
+    QTimer::singleShot(20000, &loop, [&] { worker.kill(); loop.quit(); });
+    worker.start(QCoreApplication::applicationFilePath(), {"--scan-window-worker", QString::number(handle)});
+    if (worker.state() != QProcess::NotRunning) loop.exec();
+    if (worker.state() != QProcess::NotRunning || worker.exitStatus() != QProcess::NormalExit
+        || worker.exitCode() != 0) return false;
+    const auto result = readAppScanResult(worker.readAllStandardOutput());
     bool foundButton=false,foundText=false;
     for(const auto &c:result.controls) {
         if(c.name=="Scanner Start" && c.invoke && c.unique)foundButton=true;
@@ -371,6 +378,12 @@ int main(int argc, char **argv)
     int wideArgc = 0;
     wchar_t **wideArgv = CommandLineToArgvW(GetCommandLineW(), &wideArgc);
     if (!wideArgv) return 1;
+    if (wideArgc == 3 && std::wstring(wideArgv[1]) == L"--scan-window-worker") {
+        bool valid = false;
+        const auto handle = QString::fromWCharArray(wideArgv[2]).toULongLong(&valid);
+        LocalFree(wideArgv);
+        return valid ? runAppScannerWorker(quintptr(handle)) : 2;
+    }
     if (wideArgc > 1 && std::wstring(wideArgv[1]) == L"--worker") {
         QApplication workerApplication(argc, argv);
         const int result = runBootTest(wideArgc - 1, wideArgv + 1);
@@ -522,6 +535,7 @@ int main(int argc, char **argv)
         return dialog.grab().save(QCoreApplication::applicationDirPath() + "/flow_preview.png") ? 0 : 1;
     }
     if (args.contains("--startup-self-test")) return startupSelfTest();
+    if(args.contains("--home-run-self-test")){MainWindow window;return window.homeRunSelfTest()?0:1;}
     if (args.contains("--ui-smoke-test")) {
         MainWindow window;
         window.show(); app.processEvents();
@@ -560,6 +574,7 @@ int main(int argc, char **argv)
     if (auto *screen = window.screen())
         window.resize(window.size().boundedTo(screen->availableGeometry().size() - QSize(32, 48)));
     window.show();
-    if (args.contains("--auto-run")) QTimer::singleShot(0, &window, [&] { window.startTest(false, true); });
+    window.startRelaySession();
+    if (args.contains("--auto-run")) QTimer::singleShot(4000, &window, [&] { window.startTest(false, true); });
     return app.exec();
 }

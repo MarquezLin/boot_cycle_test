@@ -11,6 +11,9 @@
 #include <QElapsedTimer>
 #include <QFormLayout>
 #include <QHeaderView>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -19,7 +22,7 @@
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QTableWidget>
-#include <QThread>
+#include <QProcess>
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QUuid>
@@ -138,7 +141,45 @@ AppScanResult scanAppControls(quintptr handle,const std::atomic_bool &cancel) {
     resolveBindings(result.controls);return result;
 }
 
-AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog(parent),m_base(base),m_cancel(std::make_shared<std::atomic_bool>(false)) {
+int runAppScannerWorker(quintptr window)
+{
+    const std::atomic_bool cancel{false};
+    const auto result = scanAppControls(window, cancel);
+    QJsonArray controls;
+    for (const auto &c : result.controls) {
+        controls.append(QJsonObject{{"name", c.name}, {"id", c.id}, {"value", c.value},
+            {"selector", c.selector}, {"windowTitle", c.windowTitle}, {"reason", c.reason},
+            {"type", c.controlType}, {"invoke", c.invoke}, {"readable", c.readable},
+            {"unique", c.unique}, {"enabled", c.enabled}});
+    }
+    const auto data = QJsonDocument(QJsonObject{{"controls", controls}, {"examined", result.examined},
+        {"error", result.error}}).toJson(QJsonDocument::Compact);
+    DWORD written = 0;
+    return WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), data.constData(), DWORD(data.size()), &written, nullptr)
+        && written == DWORD(data.size()) ? 0 : 1;
+}
+
+AppScanResult readAppScanResult(const QByteArray &data)
+{
+    const auto object = QJsonDocument::fromJson(data).object();
+    AppScanResult result;
+    if (!object.value("controls").isArray() || !object.value("error").isString()) {
+        result.error = "掃描程序未回傳有效結果";
+        return result;
+    }
+    result.error = object.value("error").toString();
+    result.examined = object.value("examined").toInt();
+    for (const auto &entry : object.value("controls").toArray()) {
+        const auto c = entry.toObject();
+        result.controls.append(AppControl{c.value("name").toString(), c.value("id").toString(),
+            c.value("value").toString(), c.value("selector").toString(), c.value("windowTitle").toString(),
+            c.value("reason").toString(), c.value("type").toInt(), c.value("invoke").toBool(),
+            c.value("readable").toBool(), c.value("unique").toBool(), c.value("enabled").toBool()});
+    }
+    return result;
+}
+
+AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog(parent),m_base(base) {
     setWindowTitle("掃描 APP，勾選建立測試腳本");resize(1100,800);setMinimumSize(850,650);
     auto *layout=new QVBoxLayout(this);auto *intro=new QLabel("1 選擇已開啟的待測視窗並掃描 → 2 勾選、調整順序及確認預期文字 → 3 加入編輯器試跑。\n掃描只讀取控制項；產生草稿也不會點擊按鈕。不需 AI 帳號。");intro->setWordWrap(true);layout->addWidget(intro);
     auto *row=new QHBoxLayout;m_windows=new QComboBox;m_scan=new QPushButton("掃描視窗");m_refresh=new QPushButton("重新整理");
@@ -179,7 +220,12 @@ AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog
     connect(m_expected,&QLineEdit::textEdited,this,[this]{store();updatePreview();});
     refreshWindows();select(-1);
 }
-AppScannerDialog::~AppScannerDialog(){m_cancel->store(true);if(m_worker)m_worker->wait();}
+AppScannerDialog::~AppScannerDialog()
+{
+    if (!m_worker) return;
+    m_worker->disconnect(this);
+    m_worker->kill();
+}
 int AppScannerDialog::insertionIndex() const {return m_position->currentData().toInt();}
 void AppScannerDialog::refreshWindows() {
     const auto selected=m_windows->currentData();m_windows->clear();
@@ -193,11 +239,37 @@ void AppScannerDialog::scan() {
     if(!handle || findFlowWindow(m_base.executable,0,m_windows->currentText())!=handle) {
         m_status->setText("視窗不存在或同名視窗不唯一；請關閉多餘視窗再重新整理。");return;
     }
-    m_busy=true;m_cancel->store(false);m_scan->setEnabled(false);m_refresh->setEnabled(false);m_windows->setEnabled(false);m_generate->setEnabled(false);
+    m_busy=true;m_scanError.clear();m_scan->setEnabled(false);m_refresh->setEnabled(false);m_windows->setEnabled(false);m_generate->setEnabled(false);
     m_status->setText("正在讀取 UI Automation 控制項，不操作待測 APP…");
-    auto result=std::make_shared<AppScanResult>();auto cancel=m_cancel;
-    m_worker.reset(QThread::create([handle,result,cancel]{*result=scanAppControls(handle,*cancel);}));
-    connect(m_worker.get(),&QThread::finished,this,[this,result] {m_busy=false;m_scan->setEnabled(true);m_refresh->setEnabled(true);m_windows->setEnabled(true);populate(*result);});m_worker->start();
+    auto *worker = m_worker = new QProcess(this);
+    const auto finish = [this, worker](AppScanResult result) {
+        m_worker = nullptr;
+        worker->deleteLater();
+        m_busy = false;
+        m_scan->setEnabled(true);
+        m_refresh->setEnabled(true);
+        m_windows->setEnabled(true);
+        populate(result);
+    };
+    connect(worker, &QProcess::finished, this, [this, worker, finish](int code, QProcess::ExitStatus status) {
+        AppScanResult result;
+        if (!m_scanError.isEmpty()) result.error = m_scanError;
+        else if (status != QProcess::NormalExit || code != 0)
+            result.error = QString("視窗掃描程序異常結束（0x%1）。可重新掃描，或改用手動取點／OCR。")
+                .arg(quint32(code), 8, 16, QLatin1Char('0'));
+        else result = readAppScanResult(worker->readAllStandardOutput());
+        finish(result);
+    });
+    connect(worker, &QProcess::errorOccurred, this, [worker, finish](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            finish(AppScanResult{{}, 0, "無法啟動視窗掃描：" + worker->errorString()});
+    });
+    QTimer::singleShot(20000, worker, [this, worker] {
+        if (worker != m_worker) return;
+        m_scanError = "視窗掃描逾時，可重新掃描或使用手動取點／OCR。";
+        worker->kill();
+    });
+    worker->start(QCoreApplication::applicationFilePath(), {"--scan-window-worker", QString::number(handle)});
 }
 void AppScannerDialog::populate(const AppScanResult &result) {
     QSignalBlocker blocker(m_table);
@@ -235,8 +307,8 @@ void AppScannerDialog::store() {
         summary.valueLabel=m_number->currentData(Qt::UserRole+2).toString();
         c.title=flowCheckSummary(summary);m_title->setText(c.title);
     }
-    m_table->item(m_selected,0)->setText(c.title);
-    m_table->item(m_selected,1)->setText(c.click?"自動按鈕操作":m_condition->currentText());
+    if (auto *item = m_table->item(m_selected, 0)) item->setText(c.title);
+    if (auto *item = m_table->item(m_selected, 1)) item->setText(c.click?"自動按鈕操作":m_condition->currentText());
 }
 void AppScannerDialog::select(int row) {
     m_loading=true;m_selected=row;const bool valid=row>=0 && row<m_choices.size();const Choice c=valid?m_choices[row]:Choice{};
@@ -279,7 +351,15 @@ void AppScannerDialog::generate() {
     if(draft.steps.isEmpty()){QMessageBox::information(this,"尚未選擇","請至少勾選一個可定位的測試項目。");return;}
     m_draft=draft;accept();
 }
-void AppScannerDialog::reject(){if(m_busy){m_cancel->store(true);m_status->setText("正在取消；目前的 UIA 呼叫返回後即可關閉。");return;}QDialog::reject();}
+void AppScannerDialog::reject()
+{
+    if (m_worker) {
+        m_scanError = "已取消掃描";
+        m_worker->kill();
+        return;
+    }
+    QDialog::reject();
+}
 void AppScannerDialog::closeEvent(QCloseEvent *event){if(m_busy){reject();event->ignore();}else event->accept();}
 
 bool appScannerSelfTest() {

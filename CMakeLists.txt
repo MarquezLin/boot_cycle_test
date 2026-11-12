@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GVFG_BootCycleTest VERSION 1.3.2 LANGUAGES CXX)
+project(GVFG_BootCycleTest VERSION 1.3.3 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "GVFG_BootCycleTest requires Windows.")
@@ -34,6 +34,7 @@ qt_add_executable(GVFG_BootCycleTest WIN32
     source/startup_manager.cpp
     source/startup_manager.h
     source/relay_controller.cpp
+    source/relay_agent.cpp
     source/relay_controller.h
     source/BootCycleTest.cpp
     source/boot_flow_runner.cpp
@@ -78,11 +79,22 @@ target_compile_options(GVFG_BootCycleTest PRIVATE
 target_link_libraries(GVFG_BootCycleTest PRIVATE
     Qt6::Widgets
     Qt6::Network
+    setupapi advapi32
     d3d11 dxgi windowsapp mfplat mfreadwrite mfuuid propsys uiautomationcore ole32 oleaut32 shell32 user32 uuid dwmapi
 )
 set_target_properties(GVFG_BootCycleTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
 )
+
+qt_add_executable(GVFG_RelayAgent WIN32
+    source/relay_agent_main.cpp
+    source/relay_agent.cpp
+    source/relay_controller.cpp
+)
+target_compile_definitions(GVFG_RelayAgent PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(GVFG_RelayAgent PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/W4> $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_link_libraries(GVFG_RelayAgent PRIVATE Qt6::Widgets Qt6::Network setupapi advapi32)
+set_target_properties(GVFG_RelayAgent PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 
 # Vendor resources belong outside disposable build/output directories.
 # Make Qt Creator's manually built executable usable with OCR as well.
@@ -116,7 +128,7 @@ set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/GVFG_BootCycleTest_autogen/mocs
 
 # Install only deployable files, never local settings, markers or test records.
 include(GNUInstallDirs)
-install(TARGETS GVFG_BootCycleTest RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS GVFG_BootCycleTest GVFG_RelayAgent RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 qt_generate_deploy_app_script(
     TARGET GVFG_BootCycleTest
     OUTPUT_SCRIPT deploy_script
@@ -124,8 +136,11 @@ qt_generate_deploy_app_script(
 )
 install(SCRIPT ${deploy_script})
 install(FILES examples/sample_capture_card_test.json DESTINATION examples)
+install(DIRECTORY DESTINATION dut)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dut/" DESTINATION dut OPTIONAL)
 install(FILES test_media/capture_card_test_1080p60.mp4 DESTINATION test_media)
 install(FILES DISTRIBUTION.md DESTINATION . RENAME README.md)
+install(FILES third_party/ch340/CH341SER.EXE DESTINATION drivers/CH340)
 install(CODE "if(NOT EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/third_party/ocr/tesseract.exe\")\n message(FATAL_ERROR \"Missing portable OCR runtime: third_party/ocr/tesseract.exe\")\nendif()")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ocr" DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/distribution/licenses" DESTINATION .)

@@ -162,10 +162,17 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         auto *fps=new QSpinBox(&dialog);fps->setRange(1,120);fps->setValue(step.sampleFps);fps->setSuffix(" FPS");fps->setEnabled(step.type!="readOCR");
         auto *seconds=new QDoubleSpinBox(&dialog);seconds->setRange(step.type=="checkVideo"?3.5:0.1,600);seconds->setDecimals(1);seconds->setValue(step.captureDurationMs/1000.0);seconds->setSuffix(" 秒");seconds->setEnabled(step.type!="readOCR");
         QLineEdit *referencePath=nullptr;
+        QSpinBox *ignoreBottom = nullptr;
         if(step.type=="checkVideo"){
             auto *referenceRow=new QWidget(&dialog);auto *referenceLayout=new QHBoxLayout(referenceRow);referenceLayout->setContentsMargins(0,0,0,0);
             referencePath=new QLineEdit(step.referenceVideo,referenceRow);referencePath->setObjectName("referenceVideoPath");referencePath->setMinimumWidth(300);referencePath->setPlaceholderText("選擇與訊號來源相同的本機影片");
             auto *browseReference=new QPushButton("選擇影片…",referenceRow);referenceLayout->addWidget(referencePath,1);referenceLayout->addWidget(browseReference);form->addRow("參考影片",referenceRow);
+            ignoreBottom = new QSpinBox(&dialog);
+            ignoreBottom->setRange(0, 40);
+            ignoreBottom->setValue(step.ignoreVideoBottomPercent);
+            ignoreBottom->setSuffix(" %");
+            ignoreBottom->setToolTip("擷取畫面與參考影片都排除底部相同比例。0% 表示比對完整畫面。");
+            form->addRow("比對時忽略底部", ignoreBottom);
             connect(browseReference,&QPushButton::clicked,&dialog,[&dialog,referencePath]{
                 const auto path=QFileDialog::getOpenFileName(&dialog,"選擇參考影片",referencePath->text(),"影片 (*.mp4 *.avi *.mov *.mkv *.wmv);;所有檔案 (*)");if(!path.isEmpty())referencePath->setText(path);
             });
@@ -182,6 +189,7 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         });connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
         if(dialog.exec()!=QDialog::Accepted)return;
         if(referencePath)m_steps[row].referenceVideo=QFileInfo(referencePath->text().trimmed()).absoluteFilePath();
+        if (ignoreBottom) m_steps[row].ignoreVideoBottomPercent = ignoreBottom->value();
         m_steps[row].activateBeforeCapture=activate->isChecked();
         m_steps[row].captureDurationMs=qRound(seconds->value()*1000);m_steps[row].captureMode=mode->currentData().toString();m_steps[row].sampleFps=fps->value();markStepForRetest(row);refreshBinding();ui->fileLabel->setText("流程已修改，請保存流程");
     });
@@ -398,6 +406,7 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         TestFlow loaded; QString error;
         if (!loadFlow(path, loaded, error)) {QMessageBox::critical(this, "無法開啟", error); return;}
         applyFlow(loaded); m_file = path; ui->fileLabel->setText(QFileInfo(path).fileName()); m_lastValue = QString();
+        m_selectedFile = path;
     });
     connect(ui->saveButton, &QPushButton::clicked, this, [this] {
         readEditor(); auto path = QFileDialog::getSaveFileName(this, "保存流程", m_file, "測試流程 (*.json)");
@@ -405,6 +414,7 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         QString error;
         if (!saveFlow(path, currentFlow(), error)) {QMessageBox::critical(this, "保存失敗", error); return;}
         m_file = path; ui->fileLabel->setText(QFileInfo(path).fileName());
+        m_selectedFile = path;
         QSettings settings(QCoreApplication::applicationDirPath() + "/test_settings.ini", QSettings::IniFormat);
         settings.setValue("Flow/LastFile", path); settings.sync();
         log("流程已保存：" + path);
@@ -709,7 +719,9 @@ TestFlow FlowDialog::currentFlow() const
 {
     TestFlow flow; flow.executable = ui->exeEdit->text(); flow.arguments = ui->argsEdit->text(); flow.workingDirectory = ui->cwdEdit->text();
     flow.ocrExecutable = ui->ocrEdit->text(); flow.ocrLanguage = ui->languageEdit->text(); flow.reuseExisting = ui->reuseExistingCheck->isChecked(); flow.steps = m_steps;
-    flow.name = m_flowName; flow.version = m_flowVersion; flow.testItems = m_testItems; return flow;
+    flow.name = m_flowName; flow.version = m_flowVersion; flow.testItems = m_testItems;
+    flow.formalCycleLimit = m_formalCycleLimit;
+    return flow;
 }
 void FlowDialog::applyFlow(const TestFlow &flow)
 {
@@ -717,6 +729,7 @@ void FlowDialog::applyFlow(const TestFlow &flow)
     ui->ocrEdit->setText(flow.ocrExecutable); ui->languageEdit->setText(flow.ocrLanguage);
     ui->reuseExistingCheck->setChecked(flow.reuseExisting);
     m_flowName = flow.name; m_flowVersion = flow.version; m_testItems = flow.testItems;
+    m_formalCycleLimit = flow.formalCycleLimit;
     m_steps = flow.steps; updateTable(); if (!m_steps.isEmpty()) ui->stepsTable->selectRow(0); else showEditor(-1);
 }
 void FlowDialog::updateTable(bool preserveResults)

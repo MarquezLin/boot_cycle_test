@@ -26,3 +26,10 @@ https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
 Microsoft Visual C++ Redistributable is provided as its original installer,
 `bin/vc_redist.x64.exe`; its license is presented by that installer.
 The application's executable is not code signed.
+
+WCH CH340/CH341 Windows USB serial driver is provided as the original
+signed installer, `drivers/CH340/CH341SER.EXE`, from Nanjing Qinheng
+Microelectronics Co., Ltd.
+https://github.com/WCH-IC/download/releases/tag/CH341
+
+Installer SHA-256: `48786874323699bb49061a652a6ceae9b7e16360d4de0046f9e0091738566f82`.

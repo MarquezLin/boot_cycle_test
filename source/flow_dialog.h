@@ -15,6 +15,7 @@ public:
     ~FlowDialog() override;
     bool insertionSelfTest();
     bool runSelfTest();
+    QString selectedFile() const { return m_selectedFile; }
 protected:
     void closeEvent(QCloseEvent *event) override;
     void reject() override;
@@ -46,10 +47,12 @@ private:
     std::unique_ptr<Ui::FlowDialog> ui;
     QVector<FlowStep> m_steps;
     QVector<FlowTestItem> m_testItems;
+    int m_formalCycleLimit = -1;
     QString m_flowName, m_flowVersion;
     FlowRunner *m_runner = nullptr;
     QPlainTextEdit *m_readDetails = nullptr;
     QString m_file, m_reportDirectory, m_lastValue, m_replayCaptureFile;
+    QString m_selectedFile;
     bool m_loading = false, m_busy = false, m_picking = false;
     QTimer m_waitTimer;
     QElapsedTimer m_stepElapsed;

@@ -35,6 +35,10 @@ if not exist "%SOURCE_ROOT%distribution\licenses\THIRD_PARTY.md" (
     echo ERROR: Missing distribution\licenses\THIRD_PARTY.md
     goto finish
 )
+if not exist "%SOURCE_ROOT%third_party\ch340\CH341SER.EXE" (
+    echo ERROR: Missing WCH driver installer: third_party\ch340\CH341SER.EXE
+    goto finish
+)
 
 echo [1/4] Loading Visual Studio x64 build environment...
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"

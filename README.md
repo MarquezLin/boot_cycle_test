@@ -161,9 +161,9 @@ cmake --install <Release建置目錄> --config Release --prefix <新的部署資
 
 紀錄區顯示最近最多 3000 行（載入時最多讀取最後 512 KiB 文字），完整 log／CSV 可從「開啟紀錄資料夾」查看。累計統計使用完整 log，不受畫面行數限制。
 
-每次試跑的 HTML 報告、CSV、詳細紀錄與流程證據集中於 EXE 旁的 `dry_run_results/YYYY-MM-DD_HH-mm-ss/`。報告只列本次試跑；正式測試的累計 HTML 報告仍位於 EXE 同一層。
+測試結束或停止後，可從主畫面按「匯出完整報告」。HTML、CSV、詳細紀錄和逐輪證據會放在 EXE 旁的 `reports/trial` 或 `reports/formal`，再依 `cold`／`warm` 分類。正式測試重開機續跑後會合併於同一批報告。
 
-「清除紀錄」確認後刪除目前的 boot_cycle_detail.log、boot_cycle_results.csv 與 boot_cycle_report.html，累計次數歸零；不刪除設定、STOP／FAILED 標記及 history 資料夾。測試執行中按鈕停用。清除不可復原，需保留紀錄時請先另行備份。
+「清除本次暫存」只刪除最近一批尚可匯出的暫存，保留累計紀錄與已匯出的報告。測試執行中不可清除或匯出。
 ## 通用測試流程（1.1 開發版）
 
 在「通用測試流程…」編輯流程並按「保存」。回主畫面按「匯入流程…」，選擇已保存的 JSON。試跑、正式測試及登入後自動測試都直接讀取所選檔案。
@@ -418,4 +418,13 @@ Windows Media Foundation 解碼本機短片（最多 120 秒，索引最長 45 �
 新步驟與缺少此欄位的舊腳本預設勾選，擷取前會啟用指定預覽視窗。可手動取消並保存 `activateBeforeCapture: false`，改成不主動切換焦點的背景擷取。編輯器與首頁共用同一個步驟執行邏輯，不再各自於流程開頭無條件切換主視窗。首頁會將 Windows 前景切換權限交給執行程序；權限或視窗啟用失敗會直接顯示「擷取尚未開始」的原因。重新分析已保存資料不啟用或操作待測視窗。
 
 
-套件包含 `test_media/capture_card_test_1080p60.mp4`（1080p60、20 秒，含色條、灰階、細線、移動圖形、影格編號與立體聲同步標記）。`examples/sample_capture_card_test.json` 保留測試步驟，待測 EXE 留空供使用者選擇；參考影片採相對於 JSON 的 `../test_media/capture_card_test_1080p60.mp4`。移動或另存腳本後請確認影片路徑。測試影片是高品質 H.264 / YUV420p / BT.709 素材，不是逐像素無損 RGB 參考。
+套件包含 `test_media/capture_card_test_1080p60.mp4`（1080p60、20 秒，含色條、灰階、細線、移動圖形、影格編號與立體聲同步標記）。`examples/sample_capture_card_test.json` 保留測試步驟，待測 EXE 預設指向 `../dut/gvfg_qt_preview.exe`；參考影片採相對於 JSON 的 `../test_media/capture_card_test_1080p60.mp4`。移動或另存腳本後請確認影片路徑。測試影片是高品質 H.264 / YUV420p / BT.709 素材，不是逐像素無損 RGB 參考。
+
+
+交付資料夾中的 `dut` 是待測 APP 放置區：完整解壓工具，將 APP 連同 DLL／資源放入 `dut`，主 EXE 放在最上層，再載入範例腳本。預設目標是 `../dut/gvfg_qt_preview.exe`；不存在時自動採用 `dut` 內唯一的 EXE，多個時仍可載入，之後在編輯器指定主 EXE。之後整個資料夾可搬移。`package_release.bat` 會完整收進專案 `dut` 的內容，包括子資料夾、EXE、DLL 及資源；打包前請確認只放入要交付的待測 APP。
+
+
+交付時請完整解壓最新 ZIP 至新資料夾，再啟動其中的 `bin/GVFG_BootCycleTest.exe` 並載入 `examples/sample_capture_card_test.json`；沿用舊解壓目錄時，本機設定可能仍指向先前選過的腳本。
+
+
+首頁與編輯器使用相同的 FlowRunner。首頁透過獨立測試程序執行流程，程序異常退出時，主畫面會顯示退出碼並寫入詳細紀錄。試跑不執行繼電器切換或 Windows 電源動作。

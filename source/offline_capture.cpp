@@ -15,6 +15,13 @@ namespace {
 constexpr qint64 budget=256LL*1024*1024;
 struct Sample {qint64 ms;QImage image;};
 struct Clip {QVector<Sample> samples;int fps=30,duration=0;QSize source;};
+// The clip owns the underlying pixels for the entire analysis.
+QImage videoComparisonView(const QImage &image, int ignoredPercent)
+{
+    if (ignoredPercent == 0) return image;
+    const int height = qMax(1, image.height() * (100 - ignoredPercent) / 100);
+    return QImage(image.constBits(), image.width(), height, image.bytesPerLine(), image.format());
+}
 bool writeClip(const QString &path,const Clip &clip,const std::atomic_bool &stop,QString &error){
     QSaveFile file(path);if(!file.open(QIODevice::WriteOnly)){error=file.errorString();return false;}
     QDataStream out(&file);out.setVersion(QDataStream::Qt_6_5);
@@ -76,10 +83,24 @@ bool offlineImageStep(const FlowStep &s,const QString &prefix,const QString &rep
     QElapsedTimer analysis;analysis.start();
     notice("正在從整段擷取資料尋找起始位置與循環對齊…");
     VideoAlignment alignment;
+    QVector<QImage> comparisonImages;
+    const int ignoredBottom = s.type == "checkVideo" ? s.ignoreVideoBottomPercent : 0;
     if(s.type=="checkVideo"){
-        QVector<QImage> images;QVector<qint64> times;
-        for(const auto &sample:samples){images.append(sample.image);times.append(sample.ms);}
-        alignment=alignReferenceSequence(images,times,reference,stop);
+        QVector<qint64> times;
+        for(const auto &sample:samples){comparisonImages.append(videoComparisonView(sample.image, ignoredBottom));times.append(sample.ms);}
+        if (ignoredBottom > 0) {
+            for (auto &frame : reference) {
+                if (stop) { error = "已停止對齊"; return false; }
+                const auto view = videoComparisonView(frame.image, ignoredBottom);
+                const double aspect = frame.image.text("aspect").toDouble() * frame.image.height() / view.height();
+                const QString source = frame.image.text("source");
+                frame.image = view.scaled(160, 90, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                frame.image.setText("aspect", QString::number(aspect));
+                frame.image.setText("source", source);
+                frame.fingerprint = frame.image.scaled(16, 9, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            }
+        }
+        alignment=alignReferenceSequence(comparisonImages,times,reference,stop);
         if(!alignment.valid){error=stop?"已停止對齊":"無法建立影片時間對齊";return false;}
     }
     QJsonArray observations;bool passed=false,allGood=true;int matches=0; qint64 firstTime=-1,firstRef=-1,lastRef=-1,lastEvidence=-1000;
@@ -87,7 +108,8 @@ bool offlineImageStep(const FlowStep &s,const QString &prefix,const QString &rep
     for(int i=0;i<samples.size() && !stop;++i){const auto &sample=samples[i];bool save=i==0 || i+1==samples.size() || sample.ms-lastEvidence>=1000;
         if(s.type=="checkVideo"){
             const qint64 expected=alignment.offsetMs+sample.ms-samples.first().ms;
-            const auto m=matchReferenceVideo(sample.image,reference,expected%alignment.durationMs,alignment.durationMs);const qint64 ref=m.index>=0?reference[m.index].ms:-1;
+            const auto &comparison = comparisonImages[i];
+            const auto m=matchReferenceVideo(comparison,reference,expected%alignment.durationMs,alignment.durationMs);const qint64 ref=m.index>=0?reference[m.index].ms:-1;
             qint64 delta=ref-expected%alignment.durationMs;
             if(delta>alignment.durationMs/2)delta-=alignment.durationMs;
             if(delta<-alignment.durationMs/2)delta+=alignment.durationMs;
@@ -97,7 +119,7 @@ bool offlineImageStep(const FlowStep &s,const QString &prefix,const QString &rep
             if(m.pass){++matches;if(firstTime<0){firstTime=sample.ms;firstRef=unwrapped;}lastRef=unwrapped;
                 const qint64 elapsed=sample.ms-firstTime,advance=lastRef-firstRef;
                 if(elapsed>=3000 && advance>=1500 && std::abs(advance-elapsed)<=1000 && matches>=5)passed=true;}
-            if(save && evidenceError.isEmpty()){if(!saveVideoEvidence(prefix+QString("_video_%1").arg(i+1),sample.image,reference,m,evidenceError))allGood=false;lastEvidence=sample.ms;}
+            if(save && evidenceError.isEmpty()){if(!saveVideoEvidence(prefix+QString("_video_%1").arg(i+1),comparison,reference,m,evidenceError))allGood=false;lastEvidence=sample.ms;}
         }else{
             const double contrast=imageContrast(sample.image),difference=baseline.isNull()?-1:imageDifference(baseline,sample.image);
             const double measure=s.condition=="change"?difference:qMax(contrast,difference);maximum=qMax(maximum,measure);passed=passed || measure>=s.expected.toDouble();
@@ -116,7 +138,9 @@ bool offlineImageStep(const FlowStep &s,const QString &prefix,const QString &rep
         .arg(alignment.offsetMs/1000.0,0,'f',3).arg(alignment.durationMs/1000.0,0,'f',3)
         .arg(qMax(qint64(0),(lastRef/alignment.durationMs)-(firstRef/alignment.durationMs))).arg(alignment.motion,0,'f',2):QString();
     detail=verdict+alignmentDetail+"\n"+sampling+QString("\n離線分析耗時 %1 秒；擷取檔：%2").arg(analysis.elapsed()/1000.0,0,'f',2).arg(prefix+".gvfgcap");
+    if (ignoredBottom > 0) detail += QString("\n擷取與參考畫面均忽略底部 %1%。").arg(ignoredBottom);
     QJsonObject metrics{{"targetFps",clip.fps},{"actualFps",actual},{"samples",samples.size()},{"maxGapMs",double(maxGap)},{"captureDurationMs",clip.duration},{"analysisMs",double(analysis.elapsed())},{"alignmentOffsetMs",double(alignment.offsetMs)},{"referenceDurationMs",double(alignment.durationMs)},{"observedMotion",alignment.motion},{"captureMode",s.captureMode},{"activateBeforeCapture",s.activateBeforeCapture},{"offline",true},{"replaySource",replay},{"observations",observations},{"pass",ok}};
+    metrics.insert("ignoreVideoBottomPercent", ignoredBottom);
     QSaveFile report(prefix+"_sampling.json");const auto data=QJsonDocument(metrics).toJson();
     if(!report.open(QIODevice::WriteOnly)||report.write(data)!=data.size()||!report.commit()){error="無法保存離線分析統計";return false;}
     if(!ok)error=evidenceError.isEmpty()?verdict:evidenceError;return ok;
@@ -150,6 +174,20 @@ bool offlineVideoReplaySelfTest(const QString &path){
     FlowStep step;step.type="checkVideo";step.referenceVideo=path;
     auto capture=[](QString &){return QImage();};auto notify=[](const QString &){};
     if(!offlineImageStep(step,dir.path()+"/moving",dir.path()+"/moving.gvfgcap",capture,notify,stop,detail,error))return false;
+    auto overlay = clip;
+    for (auto &sample : overlay.samples) {
+        for (int y = sample.image.height() * 4 / 5; y < sample.image.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(sample.image.scanLine(y));
+            for (int x = 0; x < sample.image.width(); ++x)
+                row[x] = qGray(row[x]) < 128 ? qRgb(255, 255, 255) : qRgb(0, 0, 0);
+        }
+    }
+    const QString overlayPath = dir.path() + "/overlay.gvfgcap";
+    if (!writeClip(overlayPath, overlay, stop, error)
+        || offlineImageStep(step, dir.path()+"/overlay_full", overlayPath, capture, notify, stop, detail, error)) return false;
+    step.ignoreVideoBottomPercent = 20;
+    if (!offlineImageStep(step, dir.path()+"/overlay_masked", overlayPath, capture, notify, stop, detail, error)) return false;
+    step.ignoreVideoBottomPercent = 0;
     const qint64 duration=referenceDurationMs(reference);
     for(qint64 offset:{duration/2,qMax(qint64(0),duration-700)}){
         clip.samples.clear();clip.duration=int(offset==duration/2?4500:duration*2+1500);
