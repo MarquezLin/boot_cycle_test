@@ -12,13 +12,21 @@
 #include <QSet>
 #include <QMap>
 #include <cmath>
+#include <algorithm>
 
-QStringList flowTypes() { return {"launch", "waitWindow", "clickUIA", "clickPoint", "typeText", "hotkey", "delay", "readUIA", "readOCR", "assert", "checkImage", "checkVideo"}; }
+QStringList flowTypes() { return {"launch", "waitWindow", "clickUIA", "clickPoint", "typeText", "hotkey", "delay", "readUIA", "readOCR", "assert", "checkImage", "checkVideo", "selectUIA", "loop", "stop"}; }
 QString flowTypeName(const QString &type)
 {
     const QStringList labels{"啟動 APP", "等待視窗", "點擊 UIA 控制項", "點擊視窗位置", "輸入文字", "鍵盤快捷鍵", "等待時間", "讀取 UIA 文字", "框選 OCR 讀取", "判定讀取值", "檢查預覽畫面", "參考影片比較"};
+    if (type == "selectUIA") return "選擇下拉項目";
+    if (type == "loop") return "迴圈跳轉";
+    if (type == "stop") return "停止測試";
     const int index = flowTypes().indexOf(type);
     return index < 0 ? type : labels[index];
+}
+bool flowHasStop(const TestFlow &flow)
+{
+    return std::any_of(flow.steps.cbegin(), flow.steps.cend(), [](const FlowStep &step) {return step.type == "stop";});
 }
 namespace {
 QString fieldContext(QString prefix) {
@@ -58,6 +66,9 @@ QString flowCheckSummary(const FlowStep &step) {
     return QString(step.condition.startsWith("contains")?"文字包含「":"文字判定「")+step.expected.left(80)+"」";
 }
 QString flowStepDisplayName(const FlowStep &step) {
+    if (step.type == "stop" && step.name.isEmpty()) return flowTypeName(step.type);
+    if (step.type == "loop" && step.name.isEmpty())
+        return QString("跳回第 %1 步，共 %2 次").arg(step.targetStep).arg(step.jumpCount);
     const QString summary=flowCheckSummary(step);
     return flowAutoName(step.name) && !summary.isEmpty()?summary:step.name;
 }
@@ -98,9 +109,16 @@ bool saveFlow(const QString &path, const TestFlow &flow, QString &error)
     const QDir scriptDirectory(QFileInfo(path).absolutePath());
     const auto portablePath=[&](const QString &value){return value.isEmpty() || QFileInfo(value).isRelative()?value:scriptDirectory.relativeFilePath(value);};
     QJsonArray steps;
-    for (const auto &s : flow.steps) steps.append(QJsonObject{{"type", s.type}, {"name", s.name}, {"selector", s.selector},
+    for (const auto &s : flow.steps) {
+        QJsonObject step{{"type", s.type}, {"name", s.name}, {"selector", s.selector},
         {"automationId", s.automationId}, {"text", s.text}, {"condition", s.condition}, {"expected", s.expected}, {"windowTitle", s.windowTitle},
-        {"timeoutMs", s.timeoutMs}, {"x", s.region.x()}, {"y", s.region.y()}, {"width", s.region.width()}, {"height", s.region.height()}, {"testItemId", s.testItemId}, {"valueLabel",s.valueLabel}, {"referenceVideo",portablePath(s.referenceVideo)},{"captureMode",s.captureMode},{"sampleFps",s.sampleFps},{"captureDurationMs",s.captureDurationMs},{"activateBeforeCapture",s.activateBeforeCapture},{"ignoreVideoBottomPercent",s.ignoreVideoBottomPercent}});
+        {"timeoutMs", s.timeoutMs}, {"x", s.region.x()}, {"y", s.region.y()}, {"width", s.region.width()}, {"height", s.region.height()}, {"testItemId", s.testItemId}, {"valueLabel",s.valueLabel}, {"referenceVideo",portablePath(s.referenceVideo)},{"captureMode",s.captureMode},{"sampleFps",s.sampleFps},{"captureDurationMs",s.captureDurationMs},{"activateBeforeCapture",s.activateBeforeCapture},{"ignoreVideoBottomPercent",s.ignoreVideoBottomPercent}};
+        if (s.type == "loop") {
+            step.insert("targetStep", s.targetStep);
+            step.insert("jumpCount", s.jumpCount);
+        }
+        steps.append(step);
+    }
     QJsonArray items;
     for (const auto &item : flow.testItems) items.append(QJsonObject{{"id", item.id}, {"name", item.name},
         {"instruction", item.instruction}, {"runningText", item.runningText}, {"failureHint", item.failureHint}});
@@ -169,6 +187,10 @@ bool loadFlow(const QString &path, TestFlow &flow, QString &error)
         if (!value.isObject()) {error = "步驟格式錯誤"; return false;}
         const auto o = value.toObject(); FlowStep s;
         s.type = o.value("type").toString(); s.name = o.value("name").toString(); s.selector = o.value("selector").toString();
+        if (s.type == "loop") {
+            s.targetStep = o.value("targetStep").toInt(-1);
+            s.jumpCount = o.value("jumpCount").toInt(-1);
+        }
         s.automationId = o.value("automationId").toString(); s.text = o.value("text").toString(); s.windowTitle = o.value("windowTitle").toString();
         s.condition = o.value("condition").toString("contains"); s.expected = o.value("expected").toString(); s.timeoutMs = o.value("timeoutMs").toInt(10000);
         s.testItemId = o.value("testItemId").toString();
@@ -257,9 +279,15 @@ bool validateFlow(const TestFlow &flow, QString &error, int singleStep, bool has
     for (int i = first; i < end; ++i) {
         const auto &s = flow.steps[i]; QString reason;
         if (!flowTypes().contains(s.type)) reason = "不支援的步驟";
+        else if (s.type == "loop") {
+            if (s.targetStep < 1 || s.targetStep > i) reason = "跳轉目標須為前面的步驟編號";
+            else if (s.jumpCount < 0) reason = "跳轉次數須為大於或等於 0 的整數";
+        }
+        else if (s.type == "stop") continue;
         else if ((s.type=="checkVideo" || s.type=="checkImage" || s.type=="readOCR") && (s.captureDurationMs<100 || s.captureDurationMs>600000 || s.sampleFps<1 || s.sampleFps>120 || (s.captureMode!="window" && s.captureMode!="desktop"))) reason="擷取方式或採樣頻率無效（1～120 FPS）";
         else if (s.timeoutMs < 1 || s.timeoutMs > 600000) reason = "時間必須介於 1～600000 毫秒";
-        else if ((s.type == "clickUIA" || s.type == "readUIA") && s.selector.isEmpty() && s.automationId.isEmpty()) reason = "請指定控制項名稱或 AutomationId";
+        else if ((s.type == "clickUIA" || s.type == "readUIA" || s.type == "selectUIA") && s.selector.isEmpty() && s.automationId.isEmpty()) reason = "請指定控制項名稱或 AutomationId";
+        else if (s.type == "selectUIA" && s.text.trimmed().isEmpty()) reason = "請指定下拉項目名稱";
         else if (s.selector.startsWith("regex:") && !QRegularExpression(s.selector.mid(6)).isValid()) reason = "UIA 名稱正規式無效";
         else if ((s.type == "readUIA" || s.type == "readOCR") && !s.text.isEmpty()
                  && (!QRegularExpression(s.text).isValid() || QRegularExpression(s.text).captureCount() < 1)) reason = "擷取正規式必須有效且包含括號群組";

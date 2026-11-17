@@ -8,7 +8,7 @@
   <layout class="QVBoxLayout" name="mainLayout">
    <item><widget class="QLabel" name="introLabel"><property name="text"><string>編輯流程 → 單步試跑 → 執行完整流程。此介面不執行關機或重開機。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
    <item><layout class="QHBoxLayout" name="easyLayout">
-    <item><widget class="QPushButton" name="easyButton"><property name="text"><string>補充等待／畫面檢查…</string></property><property name="minimumSize"><size><width>250</width><height>40</height></size></property></widget></item>
+    <item><widget class="QPushButton" name="easyButton"><property name="text"><string>加入補充步驟…</string></property><property name="minimumSize"><size><width>250</width><height>40</height></size></property></widget></item>
     <item><widget class="QCheckBox" name="advancedCheck"><property name="text"><string>顯示進階設定</string></property></widget></item>
    </layout></item>
    <item><widget class="QGroupBox" name="targetGroup"><property name="title"><string>待測 APP 與 OCR</string></property><layout class="QGridLayout" name="targetLayout">
@@ -95,6 +95,10 @@
     <item row="5" column="1"><widget class="QPushButton" name="previewNumberButton">
      <property name="text"><string>預覽讀取並選取數字…</string></property>
     </widget></item>
+    <item row="6" column="0"><widget class="QLabel" name="targetStepLabel"><property name="text"><string>跳轉至第幾步</string></property></widget></item>
+    <item row="6" column="1"><widget class="QSpinBox" name="targetStepSpin"><property name="minimum"><number>1</number></property><property name="maximum"><number>2147483647</number></property></widget></item>
+    <item row="6" column="2"><widget class="QLabel" name="jumpCountLabel"><property name="text"><string>跳轉次數</string></property></widget></item>
+    <item row="6" column="3"><widget class="QSpinBox" name="jumpCountSpin"><property name="maximum"><number>2147483647</number></property><property name="value"><number>1</number></property></widget></item>
    </layout></widget></item>
    <item><layout class="QHBoxLayout" name="runLayout">
     <item><widget class="QPushButton" name="singleButton"><property name="text"><string>單步試跑</string></property></widget></item>

@@ -7,7 +7,8 @@
 #include <QPushButton>
 #include <QScreen>
 
-EasyBuilder::EasyBuilder(QWidget *parent, bool insertion) : QDialog(parent), ui(std::make_unique<Ui::EasyBuilder>())
+EasyBuilder::EasyBuilder(QWidget *parent, bool insertion, const QStringList &loopTargets, const FlowStep *editLoop)
+    : QDialog(parent), ui(std::make_unique<Ui::EasyBuilder>())
 {
     ui->setupUi(this);
     m_referenceCheck=new QCheckBox("參考影片：檢查畫面與顏色",this);m_referenceCheck->setObjectName("referenceVideoCheck");
@@ -25,7 +26,28 @@ EasyBuilder::EasyBuilder(QWidget *parent, bool insertion) : QDialog(parent), ui(
     if (const auto screen = this->screen()) resize(size().boundedTo(screen->availableGeometry().size() - QSize(40, 60)));
     ui->buttonBox->button(QDialogButtonBox::Ok)->setText(insertion ? "插入補充步驟" : "加入補充步驟");
     ui->buttonBox->button(QDialogButtonBox::Cancel)->setText("取消");
-    for (auto *check : {ui->contentCheck, ui->motionCheck, ui->textCompareCheck, ui->delayCheck})
+    ui->loopTargetCombo->addItems(loopTargets);
+    ui->loopGroup->setVisible(!loopTargets.isEmpty() || editLoop);
+    if (editLoop) {
+        setWindowTitle("編輯迴圈跳轉");
+        ui->intro->setText("選擇要跳回的步驟。跳滿指定次數後，流程會接著往下執行。");
+        ui->checksGroup->hide();
+        ui->stopCheck->hide();
+        ui->statusLabel->hide();
+        ui->previewEdit->hide();
+        ui->noteLabel->hide();
+        ui->loopCheck->setChecked(true);
+        ui->loopCheck->hide();
+        ui->loopTargetCombo->setCurrentIndex(editLoop->targetStep - 1);
+        ui->loopCountSpin->setValue(editLoop->jumpCount);
+        ui->buttonBox->button(QDialogButtonBox::Ok)->setText("套用");
+        adjustSize();
+    }
+    ui->loopTargetCombo->setAccessibleName("跳轉目標步驟");
+    connect(ui->loopCheck, &QCheckBox::toggled, this, &EasyBuilder::refresh);
+    connect(ui->loopTargetCombo, &QComboBox::currentIndexChanged, this, &EasyBuilder::refresh);
+    connect(ui->loopCountSpin, &QSpinBox::valueChanged, this, &EasyBuilder::refresh);
+    for (auto *check : {ui->contentCheck, ui->motionCheck, ui->textCompareCheck, ui->delayCheck, ui->stopCheck})
         connect(check, &QCheckBox::toggled, this, &EasyBuilder::refresh);
     for (auto *spin : {ui->delaySpin}) connect(spin, &QDoubleSpinBox::valueChanged, this, &EasyBuilder::refresh);
     connect(ui->expectedTextEdit, &QLineEdit::textChanged, this, &EasyBuilder::refresh);
@@ -33,6 +55,9 @@ EasyBuilder::EasyBuilder(QWidget *parent, bool insertion) : QDialog(parent), ui(
     connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(ui->buttonBox, &QDialogButtonBox::accepted, this, [this] {
         const auto p = plan();
+        if (ui->loopCheck->isChecked() && p.loopTargetStep == 0) {
+            QMessageBox::warning(this, "請選擇跳轉目標", "迴圈跳轉須指向前面的步驟。"); return;
+        }
         if (easyPlanSteps(p).isEmpty()) {
             QMessageBox::warning(this, "請確認項目", "請至少勾選一個操作或檢查項目。"); return;
         }
@@ -47,6 +72,9 @@ EasyPlan EasyBuilder::plan() const
 {
     EasyPlan p; p.referenceCompare=m_referenceCheck->isChecked();p.referenceVideo=m_referencePath->text();p.content = ui->contentCheck->isChecked(); p.motion = ui->motionCheck->isChecked();
     p.delay = ui->delayCheck->isChecked(); p.delayMs = qRound(ui->delaySpin->value() * 1000);
+    p.loopTargetStep = ui->loopCheck->isChecked() ? ui->loopTargetCombo->currentIndex() + 1 : 0;
+    p.loopJumpCount = ui->loopCountSpin->value();
+    p.stop = ui->stopCheck->isChecked();
     p.textCompare = ui->textCompareCheck->isChecked(); p.textOcr = true;
     p.expectedText = ui->expectedTextEdit->text(); p.textCondition = ui->textConditionCombo->currentData().toString();
     return p;
@@ -58,4 +86,7 @@ void EasyBuilder::refresh()
     ui->expectedTextEdit->setEnabled(p.textCompare); ui->textConditionCombo->setEnabled(p.textCompare); ui->textConditionLabel->setEnabled(p.textCompare);
     ui->previewEdit->setPlainText(easyPlanSteps(p).isEmpty() ? "尚未選擇測試項目，請自行勾選。" : describeEasyPlan(p));
     ui->delaySpin->setEnabled(p.delay);
+    ui->loopTargetCombo->setEnabled(ui->loopCheck->isChecked());
+    ui->loopCountLabel->setEnabled(ui->loopCheck->isChecked());
+    ui->loopCountSpin->setEnabled(ui->loopCheck->isChecked());
 }

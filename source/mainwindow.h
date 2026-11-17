@@ -68,8 +68,10 @@ private:
     QString m_relayFailureReason;
     bool m_relayReconnecting = false;
     bool m_relayPolling = false;
+    bool m_relayRefreshPending = false;
     bool m_shutdownRequested = false;
     bool m_stoppedByAgent = false;
+    bool m_scriptStopped = false;
     QString m_dir;
     QString m_bootFlowFile;
     QByteArray m_pending;

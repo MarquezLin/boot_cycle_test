@@ -32,12 +32,24 @@ QVector<FlowStep> easyPlanSteps(const EasyPlan &p)
         steps.append(step);
     }
     if(p.referenceCompare) {FlowStep step;step.type="checkVideo";step.name="確認影片畫面與顏色正常";step.referenceVideo=p.referenceVideo;step.timeoutMs=10000;steps.append(step);}
+    if (p.loopTargetStep > 0) {
+        FlowStep step;
+        step.type = "loop";
+        step.targetStep = p.loopTargetStep;
+        step.jumpCount = p.loopJumpCount;
+        steps.append(step);
+    }
+    if (p.stop) {
+        FlowStep step;
+        step.type = "stop";
+        steps.append(step);
+    }
     return steps;
 }
 QString describeEasyPlan(const EasyPlan &p)
 {
     QStringList lines;
-    for (const auto &step : easyPlanSteps(p)) lines << QString::number(lines.size() + 1) + ". " + step.name;
+    for (const auto &step : easyPlanSteps(p)) lines << QString::number(lines.size() + 1) + ". " + flowStepDisplayName(step);
     return lines.join('\n') + "\n\n等待步驟不需指定目標；畫面與 OCR 項目加入後，請選取步驟並框選區域。參考影片比較：訊號來源須正常速度播放同一短片；本機只讀取參考檔，不必另開播放器。框選完整影片內容並排除黑邊，連續觀察至少 3 秒；靜止或循環切換時可能無法對齊。不會立即執行。";
 }
 bool easyPlanSelfTest()

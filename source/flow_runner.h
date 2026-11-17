@@ -1,4 +1,6 @@
 #pragma once
+struct IUIAutomation;
+struct IUIAutomationElement;
 #include "flow_model.h"
 #include <QImage>
 #include <QThread>
@@ -14,6 +16,8 @@ QImage captureDesktopWindow(quintptr window, QString &error);
 QImage captureFlowWindow(quintptr window, QString &error);
 bool pickFlowControl(quintptr window, int screenX, int screenY, QString &name, QString &id, QString &error);
 QPoint flowClientPoint(quintptr window, const QPoint &screenPoint);
+QStringList flowComboOptions(IUIAutomation *automation, IUIAutomationElement *combo,
+                             const QString &selection, QString &error);
 
 class FlowRunner final : public QThread {
     Q_OBJECT
@@ -30,6 +34,7 @@ signals:
     void windowResolved(int index, const QString &title);
     void stepFinished(int index, const QString &result, const QString &value);
     void valueRead(const QString &value);
+    void scriptStopReached();
     void completed(bool success, bool stopped);
 protected:
     void run() override;

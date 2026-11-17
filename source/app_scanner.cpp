@@ -56,7 +56,8 @@ void classifyControl(AppControl &control,int type,bool password,bool invokeAvail
 }
 void resolveBindings(QVector<AppControl> &controls) {
     for(auto &c:controls) {
-        if(!c.invoke && !c.readable)continue;
+        const bool combo = c.controlType == UIA_ComboBoxControlTypeId;
+        if(!c.invoke && !c.readable && !combo)continue;
         int ids=0,names=0,pairs=0;
         for(const auto &other:controls) {
             if(!c.id.isEmpty() && c.id==other.id)++ids;
@@ -64,7 +65,7 @@ void resolveBindings(QVector<AppControl> &controls) {
             if(!c.id.isEmpty() && c.id==other.id && !c.name.isEmpty() && c.name==other.name)++pairs;
         }
         if(ids==1) {c.unique=true;c.selector.clear();}
-        else if(c.invoke && ((!c.id.isEmpty() && pairs==1) || (c.id.isEmpty() && names==1))) {
+        else if((c.invoke || combo) && ((!c.id.isEmpty() && pairs==1) || (c.id.isEmpty() && names==1))) {
             c.unique=true;c.selector=c.name.startsWith("regex:")?"regex:^"+QRegularExpression::escape(c.name)+'$':c.name;
         } else {c.unique=false;c.reason=c.readable?"缺少唯一 ID，請用手動取點／OCR 設定文字檢查":"名稱或 ID 重複，無法唯一定位；請手動指定";}
         if(c.readable && ids!=1 && !c.invoke)c.unique=false;
@@ -73,9 +74,14 @@ void resolveBindings(QVector<AppControl> &controls) {
 bool appendChoice(TestFlow &flow,const AppControl &c,bool click,const QString &title,const QString &expected,
                   const QString &instruction,const QString &running,const QString &failure,QString &error,
                   const QString &condition="contains",const QString &extraction={}) {
-    if(!c.unique || (click?!c.invoke:!c.readable)) {error="控制項無法唯一定位或不支援所選操作，請重新掃描。";return false;}
+    const bool combo = c.controlType == UIA_ComboBoxControlTypeId;
+    if(!c.unique || (!combo && (click?!c.invoke:!c.readable))) {error="控制項無法唯一定位或不支援所選操作，請重新掃描。";return false;}
     if(title.trimmed().isEmpty()) {error="請填寫工廠看得懂的測試項目名稱。";return false;}
-    const bool numeric=condition!="contains" && condition!="equals";
+    if (combo && (expected.isEmpty() || c.options.count(expected) != 1)) {
+        error = "請選擇一個名稱唯一的下拉選項。";
+        return false;
+    }
+    const bool numeric=!combo && condition!="contains" && condition!="equals";
     if(!click && expected.trimmed().isEmpty()) {error=numeric?"請填寫數值門檻。":"請填寫預期文字，或改選數值判定並指定數字欄位。";return false;}
     if(!click && numeric) {
         QString parsed,problem;evaluateFlowValue("0",condition,expected,parsed,problem);
@@ -87,9 +93,10 @@ bool appendChoice(TestFlow &flow,const AppControl &c,bool click,const QString &t
     }
     const QString id=QUuid::createUuid().toString(QUuid::Id128);
     flow.testItems.append({id,title.trimmed(),instruction,running,failure});
-    FlowStep step;step.type=click?"clickUIA":"readUIA";step.name=title.trimmed();step.automationId=c.id;step.selector=c.selector;
+    FlowStep step;step.type=combo?"selectUIA":click?"clickUIA":"readUIA";step.name=title.trimmed();step.automationId=c.id;step.selector=c.selector;
     step.windowTitle=c.windowTitle;step.timeoutMs=click?10000:30000;step.testItemId=id;
-    if(!click){step.condition=condition;step.expected=expected;if(numeric)step.text=extraction;}
+    if(combo) step.text=expected;
+    else if(!click){step.condition=condition;step.expected=expected;if(numeric)step.text=extraction;}
     if(!click && numeric)for(const auto &field:flowNumberFields(c.value))if(field.pattern==extraction)step.valueLabel=field.name;
     if(flowAutoName(step.name)){step.name=flowStepDisplayName(step);flow.testItems.last().name=step.name;}
     flow.steps.append(step);return true;
@@ -133,6 +140,10 @@ AppScanResult scanAppControls(quintptr handle,const std::atomic_bool &cancel) {
         const bool password=cachedBool(element.get(),UIA_IsPasswordPropertyId);
         const int type=cachedInt(element.get(),UIA_ControlTypePropertyId);
         classifyControl(c,type,password,cachedBool(element.get(),UIA_IsInvokePatternAvailablePropertyId));
+        if (type == UIA_ComboBoxControlTypeId && !password) {
+            QString error;
+            c.options = flowComboOptions(automation.get(), element.get(), {}, error);
+        }
         c.enabled=cachedBool(element.get(),UIA_IsEnabledPropertyId,true);
         if(!password) {c.value=cachedText(element.get(),UIA_ValueValuePropertyId);if(c.value.isEmpty())c.value=c.name;}
         else c.name="受保護輸入欄位";
@@ -150,7 +161,7 @@ int runAppScannerWorker(quintptr window)
         controls.append(QJsonObject{{"name", c.name}, {"id", c.id}, {"value", c.value},
             {"selector", c.selector}, {"windowTitle", c.windowTitle}, {"reason", c.reason},
             {"type", c.controlType}, {"invoke", c.invoke}, {"readable", c.readable},
-            {"unique", c.unique}, {"enabled", c.enabled}});
+            {"unique", c.unique}, {"enabled", c.enabled}, {"options", QJsonArray::fromStringList(c.options)}});
     }
     const auto data = QJsonDocument(QJsonObject{{"controls", controls}, {"examined", result.examined},
         {"error", result.error}}).toJson(QJsonDocument::Compact);
@@ -175,6 +186,8 @@ AppScanResult readAppScanResult(const QByteArray &data)
             c.value("value").toString(), c.value("selector").toString(), c.value("windowTitle").toString(),
             c.value("reason").toString(), c.value("type").toInt(), c.value("invoke").toBool(),
             c.value("readable").toBool(), c.value("unique").toBool(), c.value("enabled").toBool()});
+        for (const auto &option : c.value("options").toArray())
+            result.controls.last().options.append(option.toString());
     }
     return result;
 }
@@ -197,6 +210,9 @@ AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog
     form->addRow("PASS 判定方式",m_condition);m_number=new QComboBox;m_number->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);m_number->setMinimumContentsLength(25);
     m_numberLabel=new QLabel("要判定的數值");form->addRow(m_numberLabel,m_number);
     m_expectedLabel=new QLabel("預期文字");form->addRow(m_expectedLabel,m_expected);
+    m_option = new QComboBox;
+    m_optionLabel = new QLabel("要選取的項目");
+    form->addRow(m_optionLabel, m_option);
     m_preview=new QLabel;m_preview->setTextFormat(Qt::PlainText);m_preview->setWordWrap(true);form->addRow(m_preview);
     m_instruction=new QPlainTextEdit;m_instruction->setMaximumHeight(60);m_failure=new QPlainTextEdit;m_failure->setMaximumHeight(60);
     form->addRow("操作者說明",m_instruction);form->addRow("失敗排查提示",m_failure);layout->addLayout(form);
@@ -218,6 +234,7 @@ AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog
     connect(m_condition,&QComboBox::currentIndexChanged,this,[this]{if(!m_loading){store();select(m_selected);}});
     connect(m_number,&QComboBox::currentIndexChanged,this,[this]{if(!m_loading){store();updatePreview();}});
     connect(m_expected,&QLineEdit::textEdited,this,[this]{store();updatePreview();});
+    connect(m_option,&QComboBox::currentIndexChanged,this,[this]{if(!m_loading)store();});
     refreshWindows();select(-1);
 }
 AppScannerDialog::~AppScannerDialog()
@@ -275,10 +292,18 @@ void AppScannerDialog::populate(const AppScanResult &result) {
     QSignalBlocker blocker(m_table);
     m_loading=true;m_selected=-1;m_choices.clear();m_table->setRowCount(0);
     if(result.error.isEmpty())for(const auto &c:result.controls) {
-        if(!c.invoke && !c.readable)continue;
+        const bool combo = c.controlType == UIA_ComboBoxControlTypeId;
+        if(!c.invoke && !c.readable && !combo)continue;
         Choice choice;choice.control=c;choice.click=c.invoke && !c.readable;
         const QString label=c.name.isEmpty()?c.id:c.name;
         choice.title=(choice.click?"執行「":"確認「")+label.left(70)+(choice.click?"」按鈕":"」顯示文字");
+        if (combo) {
+            choice.title = "選擇「" + label.left(70) + "」下拉項目";
+            if (c.options.isEmpty()) {
+                choice.control.unique = false;
+                choice.control.reason = "UI Automation 未提供可選項目";
+            }
+        }
         choice.instruction="由程式自動執行，不需操作。";choice.runningText=choice.click?"正在送出按鈕操作。":"正在等待預期文字出現。";
         choice.failureHint="請確認 APP 狀態與設備連接；仍失敗時通知工程人員。";m_choices.append(choice);
     }
@@ -286,7 +311,8 @@ void AppScannerDialog::populate(const AppScanResult &result) {
     for(int i=0;i<m_choices.size();++i) {
         const auto &choice=m_choices[i];auto *name=new QTableWidgetItem(choice.title);
         name->setFlags(Qt::ItemIsSelectable|Qt::ItemIsEnabled|(choice.control.unique?Qt::ItemIsUserCheckable:Qt::NoItemFlags));name->setCheckState(choice.checked?Qt::Checked:Qt::Unchecked);m_table->setItem(i,0,name);
-        m_table->setItem(i,1,new QTableWidgetItem(choice.click?"自動按鈕操作":"文字包含檢查"));
+        m_table->setItem(i,1,new QTableWidgetItem(choice.control.controlType == UIA_ComboBoxControlTypeId
+            ? "選擇下拉項目" : choice.click?"自動按鈕操作":"文字包含檢查"));
         auto *value=new QTableWidgetItem(choice.control.value.left(180));value->setToolTip(choice.control.value);m_table->setItem(i,2,value);
         const QString reason=choice.control.unique?(choice.control.enabled?QString("可定位"):QString("可定位／目前停用")):choice.control.reason;
         m_table->setItem(i,3,new QTableWidgetItem(reason));
@@ -300,6 +326,11 @@ void AppScannerDialog::store() {
     if(m_loading || m_selected<0 || m_selected>=m_choices.size())return;
     auto &c=m_choices[m_selected];if(c.title!=m_title->text())c.autoTitle=false;
     c.title=m_title->text();c.expected=m_expected->text();c.instruction=m_instruction->toPlainText();c.failureHint=m_failure->toPlainText();
+    if (c.control.controlType == UIA_ComboBoxControlTypeId) {
+        c.expected = m_option->currentText();
+        if (auto *item = m_table->item(m_selected, 0)) item->setText(c.title);
+        return;
+    }
     c.condition=m_condition->currentData().toString();
     if(c.condition!="contains" && c.condition!="equals")c.extraction=m_number->currentData().toString();
     if(!c.click && c.autoTitle && !c.expected.isEmpty()) {
@@ -312,8 +343,19 @@ void AppScannerDialog::store() {
 }
 void AppScannerDialog::select(int row) {
     m_loading=true;m_selected=row;const bool valid=row>=0 && row<m_choices.size();const Choice c=valid?m_choices[row]:Choice{};
+    const bool combo = c.control.controlType == UIA_ComboBoxControlTypeId;
+    m_option->clear();
+    m_option->addItems(c.control.options);
+    m_option->setPlaceholderText("請選擇項目");
+    m_option->setCurrentIndex(c.expected.isEmpty() ? -1 : m_option->findText(c.expected));
+    m_option->setVisible(combo);
+    m_optionLabel->setVisible(combo);
+    m_option->setEnabled(c.control.unique);
     m_title->setText(c.title);m_expected->setText(c.expected);m_expected->setEnabled(valid && !c.click && c.control.unique);
     m_condition->setCurrentIndex(qMax(0,m_condition->findData(c.condition)));m_condition->setEnabled(valid && !c.click && c.control.unique);
+    m_expected->setVisible(!combo);
+    m_expectedLabel->setVisible(!combo);
+    m_condition->setEnabled(!combo && valid && !c.click && c.control.unique);
     m_number->clear();m_number->setPlaceholderText("請選擇欄位，例如 CH0 Audio 的 received");
     for(const auto &field:flowNumberFields(c.control.value)){m_number->addItem(field.label,field.pattern);m_number->setItemData(m_number->count()-1,field.value,Qt::UserRole+1);m_number->setItemData(m_number->count()-1,field.name,Qt::UserRole+2);}
     m_number->setCurrentIndex(c.extraction.isEmpty()?-1:m_number->findData(c.extraction));
@@ -327,7 +369,8 @@ void AppScannerDialog::select(int row) {
         c.click?QString("此項只確認按鈕命令執行成功；實際功能請另外加入判定。"):QString("請指定真正的通過條件；數值判定須明確選擇欄位，不會自動取第一個數字。")):QString());m_loading=false;updatePreview();
 }
 void AppScannerDialog::updatePreview() {
-    if(m_selected<0 || m_selected>=m_choices.size() || m_choices[m_selected].click){m_preview->clear();return;}
+    if(m_selected<0 || m_selected>=m_choices.size() || m_choices[m_selected].click
+        || m_choices[m_selected].control.controlType == UIA_ComboBoxControlTypeId){m_preview->clear();return;}
     const QString condition=m_condition->currentData().toString();const bool numeric=condition!="contains" && condition!="equals";
     if(numeric && m_number->currentIndex()<0){m_preview->setText("請選擇要讀取的數值欄位，再填寫門檻。");return;}
     if(m_expected->text().trimmed().isEmpty()){m_preview->setText(numeric?"請填寫 PASS 門檻。":"請填寫預期文字，或改選數值判定。");return;}

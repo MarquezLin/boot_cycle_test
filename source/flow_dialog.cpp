@@ -36,10 +36,23 @@
 #include <windows.h>
 
 namespace {
+QStringList earlierStepLabels(const QVector<FlowStep> &steps, int end)
+{
+    QStringList labels;
+    for (int i = 0; i < end; ++i) {
+        const auto &step = steps[i];
+        const QString name = flowStepDisplayName(step).simplified();
+        labels.append(QString("%1. %2").arg(i + 1)
+            .arg(name.isEmpty() ? flowTypeName(step.type) : name));
+    }
+    return labels;
+}
 QString bindingSummary(const FlowStep &step)
 {
+    if (step.type == "stop") return "結束本次測試，不關機或重開機";
+    if (step.type == "loop") return QString("跳轉至第 %1 步，共 %2 次").arg(step.targetStep).arg(step.jumpCount);
     if(step.type=="checkVideo")return "參考影片："+step.referenceVideo+QString("；區域 %1 × %2；平均 RGB 差 ≤ 12，異常像素 ≤ 8%；需連續 3 秒正常播放").arg(step.region.width()).arg(step.region.height());
-    if (step.type == "clickUIA" || step.type == "readUIA") {
+    if (step.type == "clickUIA" || step.type == "readUIA" || step.type == "selectUIA") {
         if (step.selector.isEmpty() && step.automationId.isEmpty()) return "尚未指定控制項：請按「指一下文字／按鈕位置」。";
         if (step.selector == "@point") return QString("已指定位置 (%1, %2)；名稱與 AutomationId 未指定，依位置查找 UIA 控制項。").arg(step.region.x()).arg(step.region.y());
         return "已設定控制項；名稱：" + (step.selector.isEmpty() ? "未指定" : step.selector)
@@ -267,7 +280,8 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
     connect(ui->insertBeforeButton, &QPushButton::clicked, this, [this] {buildInsertion(false);});
     connect(ui->insertAfterButton, &QPushButton::clicked, this, [this] {buildInsertion(true);});
     connect(ui->easyButton, &QPushButton::clicked, this, [this] {
-        EasyBuilder builder(this); if (builder.exec() != QDialog::Accepted) return;
+        EasyBuilder builder(this, false, earlierStepLabels(m_steps, static_cast<int>(m_steps.size())));
+        if (builder.exec() != QDialog::Accepted) return;
         if (!builder.append() || m_steps.isEmpty()) {
             FlowStep launch; launch.type = "launch"; launch.name = "開啟待測 APP";
             FlowStep wait; wait.type = "waitWindow"; wait.name = "等待 APP 出現"; wait.timeoutMs = 60000;
@@ -302,7 +316,15 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         const auto path = QFileDialog::getOpenFileName(this, "選擇 EXE", edit->text(), "執行檔 (*.exe)");
         if (!path.isEmpty()) edit->setText(path);
     };
-    connect(ui->browseExeButton, &QPushButton::clicked, this, [=] {browse(ui->exeEdit);});
+    connect(ui->browseExeButton, &QPushButton::clicked, this, [this, browse] {
+        const QFileInfo previous(ui->exeEdit->text());
+        browse(ui->exeEdit);
+        if (QFileInfo(ui->exeEdit->text()) != previous) {
+            ui->cwdEdit->clear();
+            m_lastValue = QString();
+            refreshWindows();
+        }
+    });
     connect(ui->launchExeButton, &QPushButton::clicked, this, [this] {
         const auto flow = currentFlow();
         const QFileInfo exe(flow.executable);
@@ -321,7 +343,8 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         const auto workDir = flow.workingDirectory.isEmpty() ? exe.absolutePath() : flow.workingDirectory;
         if (!QDir(workDir).exists() || !QProcess::startDetached(exe.absoluteFilePath(),
                 QProcess::splitCommand(flow.arguments), workDir)) {
-            QMessageBox::warning(this, "無法開啟待測 EXE", "請確認啟動參數、工作目錄及執行權限。");
+            QMessageBox::warning(this, "無法開啟待測 EXE",
+                "請確認啟動參數、工作目錄及執行權限。\n工作目錄：" + QDir::toNativeSeparators(workDir));
             return;
         }
         log("已啟動待測 APP。視窗出現後即可取控制項或框選區域。");
@@ -338,6 +361,10 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
         if(m_busy || m_loading || row<0 || row>=m_steps.size())return;
         readEditor();ui->stepsTable->selectRow(row);showEditor(row);
         const auto type=m_steps[row].type;
+        if (type == "stop") {
+            ui->statusLabel->setText("執行到這一步會停止測試，不關機或重開機。");
+            return;
+        }
         if(type=="checkVideo" || type=="checkImage" || type=="readOCR" || type=="clickPoint") {
             // Use the same crop editor as the explicit button, including its
             // validation, OCR conditions, retest marking and cancel behaviour.
@@ -354,6 +381,19 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
             if(m_steps[row].name==oldName)m_steps[row].name=QString("等待 %1 秒").arg(QString::number(milliseconds/1000.0));
             m_steps[row].timeoutMs=milliseconds;updateTable(true);ui->stepsTable->selectRow(row);showEditor(row);
             markStepForRetest(row);ui->fileLabel->setText("流程已修改，請保存流程");return;
+        }
+        if (type == "loop") {
+            auto &step = m_steps[row];
+            EasyBuilder builder(this, false, earlierStepLabels(m_steps, row), &step);
+            if (builder.exec() != QDialog::Accepted) return;
+            const auto plan = builder.plan();
+            if (step.targetStep == plan.loopTargetStep && step.jumpCount == plan.loopJumpCount) return;
+            step.targetStep = plan.loopTargetStep;
+            step.jumpCount = plan.loopJumpCount;
+            updateTable(true);
+            markStepForRetest(row);
+            ui->fileLabel->setText("流程已修改，請保存流程");
+            return;
         }
         ui->advancedCheck->setChecked(true);showEditor(row);
         QWidget *field=type=="readUIA" || type=="assert"?static_cast<QWidget *>(ui->expectedEdit)
@@ -380,6 +420,7 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
             if(image)menu.addAction("分析已擷取資料…",this,[this]{if(auto *button=findChild<QPushButton *>("reanalyzeButton"))button->click();});
         }
         if(type=="delay")menu.addAction("編輯等待時間…",this,[editStep,row]{editStep(row,0);});
+        if(type=="loop")menu.addAction("編輯迴圈跳轉…",this,[editStep,row]{editStep(row,0);});
         if(type=="readUIA" || type=="assert")menu.addAction("讀取與 PASS 條件…",this,[this,row]{ui->advancedCheck->setChecked(true);showEditor(row);ui->expectedEdit->setFocus();});
         if(type=="readUIA" || ocr)menu.addAction("預覽讀取並選取數字…",ui->previewNumberButton,&QPushButton::click);
         if(uia)menu.addAction("重新指定文字／按鈕位置…",ui->pickButton,&QPushButton::click);
@@ -391,7 +432,7 @@ FlowDialog::FlowDialog(const QString &target, QWidget *parent, const QString &fi
     });
     for (auto *edit : {ui->nameEdit, ui->selectorEdit, ui->idEdit, ui->textEdit, ui->expectedEdit})
         connect(edit, &QLineEdit::textEdited, this, &FlowDialog::readEditor);
-    for (auto *spin : {ui->timeoutSpin, ui->xSpin, ui->ySpin, ui->widthSpin, ui->heightSpin})
+    for (auto *spin : {ui->timeoutSpin, ui->xSpin, ui->ySpin, ui->widthSpin, ui->heightSpin, ui->targetStepSpin, ui->jumpCountSpin})
         connect(spin, &QSpinBox::valueChanged, this, &FlowDialog::readEditor);
     connect(ui->typeCombo, &QComboBox::currentIndexChanged, this, &FlowDialog::readEditor);
     connect(ui->conditionCombo, &QComboBox::currentIndexChanged, this, &FlowDialog::readEditor);
@@ -538,9 +579,13 @@ void FlowDialog::buildInsertion(bool after)
     if (m_busy) return;
     const int row = ui->stepsTable->currentRow();
     const int index = row < 0 ? static_cast<int>(m_steps.size()) : row + (after ? 1 : 0);
-    EasyBuilder builder(this, true);
+    EasyBuilder builder(this, true, earlierStepLabels(m_steps, index));
     if (builder.exec() != QDialog::Accepted) return;
     readEditor();const auto steps=easyPlanSteps(builder.plan());insertSteps(index, steps);
+    if (steps.last().type == "stop")
+        ui->statusLabel->setText("已加入停止測試。執行到這一步不會關機或重開機，請保存流程。");
+    else if (steps.last().type == "loop")
+        ui->statusLabel->setText("已加入迴圈跳轉。雙擊該步驟可修改，完成後請保存流程。");
     for(const auto &step:steps)if(step.type=="readOCR" || step.type=="checkImage" || step.type=="checkVideo") {
         ui->advancedCheck->setChecked(true);
         ui->statusLabel->setText("已加入框選檢查；請按「框選文字或預覽區域」指定範圍，再單步試跑。");break;
@@ -790,6 +835,10 @@ void FlowDialog::readEditor()
     s.type = ui->typeCombo->currentData().toString(); s.name = ui->nameEdit->text(); s.selector = ui->selectorEdit->text();
     s.automationId = ui->idEdit->text(); s.text = ui->textEdit->text(); s.condition = ui->conditionCombo->currentData().toString();
     s.expected = ui->expectedEdit->text(); s.timeoutMs = ui->timeoutSpin->value(); s.region = QRect(ui->xSpin->value(), ui->ySpin->value(), ui->widthSpin->value(), ui->heightSpin->value());
+    if (s.type == "loop") {
+        s.targetStep = ui->targetStepSpin->value();
+        s.jumpCount = ui->jumpCountSpin->value();
+    }
     ui->stepsTable->item(row, 0)->setText(flowTypeName(s.type)); ui->stepsTable->item(row, 1)->setText(flowStepDisplayName(s));
     if(auto *summary=ui->stepsTable->item(row,4))summary->setText(flowCheckSummary(s).isEmpty()?bindingSummary(s):"PASS："+flowCheckSummary(s));
     refreshFields(); refreshBinding();
@@ -803,7 +852,8 @@ void FlowDialog::showEditor(int row)
     m_loading = true; const auto &s = m_steps[row]; ui->typeCombo->setCurrentIndex(ui->typeCombo->findData(s.type));
     ui->nameEdit->setText(s.name); ui->selectorEdit->setText(s.selector); ui->idEdit->setText(s.automationId); ui->textEdit->setText(s.text);
     ui->conditionCombo->setCurrentIndex(ui->conditionCombo->findData(s.condition)); ui->expectedEdit->setText(s.expected); ui->timeoutSpin->setValue(s.timeoutMs);
-    ui->xSpin->setValue(s.region.x()); ui->ySpin->setValue(s.region.y()); ui->widthSpin->setValue(qMax(0, s.region.width())); ui->heightSpin->setValue(qMax(0, s.region.height())); m_loading = false;
+    ui->xSpin->setValue(s.region.x()); ui->ySpin->setValue(s.region.y()); ui->widthSpin->setValue(qMax(0, s.region.width())); ui->heightSpin->setValue(qMax(0, s.region.height()));
+    ui->targetStepSpin->setValue(s.targetStep); ui->jumpCountSpin->setValue(s.jumpCount); m_loading = false;
     refreshFields(); refreshWindows(); refreshBinding();
 }
 void FlowDialog::refreshWindows()
@@ -836,11 +886,14 @@ void FlowDialog::refreshBinding()
 void FlowDialog::refreshFields()
 {
     const auto type = ui->typeCombo->currentData().toString();
-    const bool uia = type == "clickUIA" || type == "readUIA", read = type == "readUIA" || type == "readOCR";
+    const bool loop = type == "loop";
+    for (auto *widget : QList<QWidget *>{ui->targetStepLabel, ui->targetStepSpin, ui->jumpCountLabel, ui->jumpCountSpin})
+        widget->setVisible(loop);
+    const bool uia = type == "clickUIA" || type == "readUIA" || type == "selectUIA", read = type == "readUIA" || type == "readOCR";
     const bool image = type == "checkImage" || type == "checkVideo";
     const bool coordinates = type == "clickPoint" || type == "readOCR" || image, condition = read || type == "assert" || image;
     ui->selectorEdit->setEnabled(uia); ui->idEdit->setEnabled(uia); ui->pickButton->setEnabled(uia);
-    ui->textEdit->setEnabled(read || type == "typeText" || type == "hotkey");
+    ui->textEdit->setEnabled(read || type == "typeText" || type == "hotkey" || type == "selectUIA");
     ui->previewNumberButton->setEnabled(read && !m_busy);
     ui->conditionCombo->setEnabled(condition); ui->expectedEdit->setEnabled(condition);
     ui->xSpin->setEnabled(coordinates); ui->ySpin->setEnabled(coordinates);

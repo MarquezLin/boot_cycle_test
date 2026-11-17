@@ -28,6 +28,8 @@
 #include <QMessageBox>
 #include <QEventLoop>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QSpinBox>
 #include <QPushButton>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -52,6 +54,10 @@ static bool scannerFixtureSelfTest()
     auto *layout=new QVBoxLayout(&fixture);auto *button=new QPushButton("Scanner Start",&fixture);
     button->setObjectName("scannerStart");layout->addWidget(button);
     auto *state=new QLineEdit("Stopped",&fixture);state->setObjectName("scannerState");state->setReadOnly(true);layout->addWidget(state);
+    auto *combo = new QComboBox(&fixture);
+    combo->setObjectName("scannerDevice");
+    combo->addItems({"Device #1", "Device #2"});
+    layout->addWidget(combo);
     int clicks=0;QObject::connect(button,&QPushButton::clicked,&fixture,[&]{++clicks;});
     fixture.show();QApplication::processEvents();
     const quintptr handle=static_cast<quintptr>(fixture.winId());
@@ -67,12 +73,39 @@ static bool scannerFixtureSelfTest()
     if (worker.state() != QProcess::NotRunning || worker.exitStatus() != QProcess::NormalExit
         || worker.exitCode() != 0) return false;
     const auto result = readAppScanResult(worker.readAllStandardOutput());
-    bool foundButton=false,foundText=false;
+    bool foundButton=false,foundText=false,foundCombo=false;
     for(const auto &c:result.controls) {
         if(c.name=="Scanner Start" && c.invoke && c.unique)foundButton=true;
         if(c.value=="Stopped" && c.readable && c.unique)foundText=true;
+        if(c.options == QStringList{"Device #1", "Device #2"} && c.unique) foundCombo=true;
     }
-    return result.error.isEmpty() && foundButton && foundText && clicks==0 && state->text()=="Stopped";
+    if (!result.error.isEmpty() || !foundButton || !foundText || !foundCombo || clicks != 0
+        || state->text() != "Stopped" || combo->currentIndex() != 0) return false;
+    const auto option = std::find_if(result.controls.cbegin(), result.controls.cend(),
+        [](const AppControl &control) { return control.options == QStringList{"Device #1", "Device #2"}; });
+    FlowRunner runner;
+    runner.flow.executable = QCoreApplication::applicationFilePath();
+    FlowStep step;
+    step.type = "selectUIA";
+    step.windowTitle = fixture.windowTitle();
+    step.automationId = option->id;
+    step.selector = option->selector;
+    step.text = "Device #2";
+    runner.flow.steps.append(step);
+    bool passed = false;
+    QObject::connect(&runner, &FlowRunner::stepFinished, &loop,
+        [&](int, const QString &status, const QString &detail) {
+            passed = status == "PASS";
+            if (!passed) qWarning() << detail;
+        });
+    QObject::connect(&runner, &QThread::finished, &loop, &QEventLoop::quit);
+    fixture.raise();
+    fixture.activateWindow();
+    QApplication::processEvents();
+    runner.start();
+    loop.exec();
+    runner.wait();
+    return passed && combo->currentIndex() == 1;
 }
 static bool videoRunnerSelfTest(const QString &path)
 {
@@ -456,7 +489,7 @@ int main(int argc, char **argv)
         return passed ? 0 : 1;
     }
     if (args.contains("--supplement-self-test") || args.contains("--easy-delay-self-test")) {
-        EasyBuilder dialog(nullptr, true);
+        EasyBuilder dialog(nullptr, true, {"1. 啟動 APP", "2. 等待視窗"});
         auto *buttonCheck = dialog.findChild<QAbstractButton *>("delayCheck");
         auto *buttons = dialog.findChild<QDialogButtonBox *>("buttonBox");
         if (!buttonCheck || !buttons) return 1;
@@ -486,6 +519,26 @@ int main(int argc, char **argv)
                 check->setChecked(false);
             }
             buttonCheck->setChecked(true);
+            auto *loopCheck = dialog.findChild<QAbstractButton *>("loopCheck");
+            auto *stopCheck = dialog.findChild<QAbstractButton *>("stopCheck");
+            auto *target = dialog.findChild<QComboBox *>("loopTargetCombo");
+            auto *count = dialog.findChild<QSpinBox *>("loopCountSpin");
+            if (!loopCheck || !stopCheck || !target || !count || target->count() != 2 || target->isEnabled()) return 1;
+            loopCheck->setChecked(true);
+            stopCheck->setChecked(true);
+            target->setCurrentIndex(1);
+            count->setValue(3);
+            buttons->button(QDialogButtonBox::Ok)->click();
+            const auto steps = easyPlanSteps(dialog.plan());
+            if (dialog.result() != QDialog::Accepted || steps.size() != 3 || steps[2].type != "stop"
+                || steps[0].type != "delay" || steps[0].timeoutMs != 1500
+                || steps[1].type != "loop" || steps[1].targetStep != 2 || steps[1].jumpCount != 3) return 1;
+            EasyBuilder edit(nullptr, false, {"1. 啟動 APP", "2. 等待視窗"}, &steps[1]);
+            auto *editCount = edit.findChild<QSpinBox *>("loopCountSpin");
+            if (!editCount || edit.plan().loopTargetStep != 2 || editCount->value() != 3) return 1;
+            editCount->setValue(4);
+            const auto edited = easyPlanSteps(edit.plan());
+            return edited.size() == 1 && edited[0].targetStep == 2 && edited[0].jumpCount == 4 ? 0 : 1;
         }
         buttons->button(QDialogButtonBox::Ok)->click();
         const auto steps = easyPlanSteps(dialog.plan());

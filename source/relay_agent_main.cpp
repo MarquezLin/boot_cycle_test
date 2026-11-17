@@ -16,6 +16,8 @@
 #include <QUdpSocket>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProcess>
+#include <QDir>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSpinBox>
@@ -85,7 +87,7 @@ public:
         form->addRow("HTTP 埠", &port);
         const auto legacy = loadRelaySettings(QCoreApplication::applicationDirPath());
         serialSettings = legacy;
-        devices.setHorizontalHeaderLabels({"待測 PC IPv4", "負載接點", "排程狀態", "電腦名稱", "測試狀態", "已測／目標"});
+        devices.setHorizontalHeaderLabels({"待測 PC IPv4", "負載接點", "排程狀態", "電腦名稱", "測試狀態", "正式已測／目標", "累計測試"});
         devices.horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         devices.setIconSize(QSize(14, 14));
         devices.setSelectionMode(QAbstractItemView::SingleSelection);
@@ -106,7 +108,7 @@ public:
             auto *status = new QTableWidgetItem;
             status->setFlags(status->flags() & ~Qt::ItemIsEditable);
             devices.setItem(row, 2, status);
-            for (int column : {3, 4, 5}) {
+            for (int column : {3, 4, 5, 6}) {
                 auto *display = new QTableWidgetItem;
                 display->setFlags(display->flags() & ~Qt::ItemIsEditable);
                 devices.setItem(row, column, display);
@@ -217,12 +219,17 @@ private:
         int ticks;
         qint64 deadline;
         QByteArray state;
+        QHostAddress peer;
+        qint64 shutdownDeadline = 0;
+        int offlineChecks = 0;
+        bool checking = false;
     };
     struct SendResult { bool sent = false; QString error; QStringList log; };
     struct DeviceReport {
         QString name, state, command, id;
         qint64 seen = 0, commandUntil = 0;
         QString cycles;
+        QString total;
     };
 
     bool onTestNetwork(const QHostAddress &address) const
@@ -391,11 +398,12 @@ private:
             auto *schedule = devices.item(row, 2);
             QString scheduleText = lastResult.value(row + 1, "待命");
             Light scheduleLight = scheduleText == "傳送未確認" ? Light::Red
-                : scheduleText == "模組已確認" ? Light::Green : Light::Gray;
+                    : scheduleText == "模組已確認" ? Light::Green
+                    : scheduleText == "關機等待逾時" || scheduleText == "Ping 檢查失敗" ? Light::Red : Light::Gray;
             if (!id.isEmpty()) {
                 const auto &request = requests[id];
-                scheduleText = request.state == "sending" ? "送出斷電指令"
-                    : request.deadline <= now ? "等待 RS485" : remainingTime(request.deadline - now);
+                scheduleText = request.state == "sending" ? "待測端已離線，送出斷電指令"
+                    : request.checking ? "確認離線中" : request.deadline <= now ? "等待 RS485" : remainingTime(request.deadline - now);
                 scheduleLight = Light::Amber;
                 activePowerActions.append(QString("CH%1  %2").arg(row + 1).arg(scheduleText));
             }
@@ -430,6 +438,11 @@ private:
             devices.item(row, 4)->setText(label);
             devices.item(row, 4)->setIcon(statusLight(light));
             auto *cycles = devices.item(row, 5);
+            auto *total = devices.item(row, 6);
+            total->setText(report == reports.cend() || report->total.isEmpty() ? "—" : report->total);
+            auto font = total->font();
+            font.setBold(true);
+            total->setFont(font);
             cycles->setText(report == reports.cend() || report->cycles.isEmpty() ? "—" : report->cycles);
             cycles->setToolTip(report != reports.cend() && !online(*report)
                 ? "待測端失聯，顯示最後一次回報的正式輪數。"
@@ -493,6 +506,62 @@ private:
             return;
         }
         auto &request = requests[id];
+        if (probe) return;
+        if (clock.elapsed() >= request.shutdownDeadline) {
+            request.state = "shutdown-timeout";
+            pending.remove(request.channel);
+            lastResult[request.channel] = "關機等待逾時";
+            log.appendPlainText(QString("CH%1 %2 關機等待逾時，取消斷電排程").arg(request.channel).arg(id));
+            updateUi();
+            countdown.start(0);
+            return;
+        }
+        const auto report = reports.constFind(request.peer);
+        if (report != reports.cend() && online(*report)) request.offlineChecks = 0;
+        if (request.offlineChecks < 2) {
+            request.checking = true;
+            probe = new QProcess(this);
+            auto *process = probe;
+            const auto finished = [this, id, process](bool valid, bool replied) {
+                probe = nullptr;
+                process->deleteLater();
+                auto &entry = requests[id];
+                if (entry.state == "scheduled") {
+                    const auto report = reports.constFind(entry.peer);
+                    const bool responding = replied || (report != reports.cend() && online(*report));
+                    entry.offlineChecks = !valid || responding ? 0 : entry.offlineChecks + 1;
+                    if (!valid) {
+                        entry.state = "shutdown-timeout";
+                        pending.remove(entry.channel);
+                        lastResult[entry.channel] = "Ping 檢查失敗";
+                        log.appendPlainText(QString("CH%1 %2 %3，取消斷電排程")
+                            .arg(entry.channel).arg(id, lastResult.value(entry.channel)));
+                    } else if (entry.offlineChecks >= 2 && clock.elapsed() < entry.shutdownDeadline) {
+                        log.appendPlainText(QString("CH%1 %2 待測端已離線，準備送出斷電命令")
+                            .arg(entry.channel).arg(id));
+                    } else {
+                        entry.deadline = qMin(clock.elapsed() + 1000, entry.shutdownDeadline);
+                    }
+                }
+                updateUi();
+                dispatchNext();
+            };
+            connect(process, &QProcess::finished, this, [process, finished](int code, QProcess::ExitStatus status) {
+                const auto output = process->readAllStandardOutput();
+                finished(status == QProcess::NormalExit && (code == 0 || code == 1) && !output.isEmpty(),
+                         output.toUpper().contains("TTL="));
+            });
+            connect(process, &QProcess::errorOccurred, this, [finished](QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) finished(false, false);
+            });
+            QTimer::singleShot(2500, process, [process] {
+                if (process->state() != QProcess::NotRunning) process->kill();
+            });
+            const QString ping = QDir(qEnvironmentVariable("SystemRoot")).filePath("System32/ping.exe");
+            process->start(ping, {"-4", "-n", "1", "-w", "700", request.peer.toString()});
+            updateUi();
+            return;
+        }
         request.state = "sending";
         auto settings = serialSettings;
         settings.channel = request.channel;
@@ -653,10 +722,13 @@ private:
         }
 
         requests.insert(id, {channel, delay, ticks, clock.elapsed() + qint64(delay) * 1000, "scheduled"});
+        auto &request = requests[id];
+        request.peer = socket->peerAddress();
+        request.shutdownDeadline = clock.elapsed() + qMax<qint64>(120000, qint64(delay) * 1000 + 4000);
         pending.insert(channel, id);
         contacts.insert(channel, route->normallyClosed);
         respond(socket, 200, {{"id", id}, {"state", "scheduled"}, {"remainingMs", delay * 1000}});
-        log.appendPlainText(QString("CH%1 %2 已接受，%3 秒後送出命令，斷電維持 %4 秒")
+        log.appendPlainText(QString("CH%1 %2 已接受，%3 秒後確認待測端離線，斷電維持 %4 秒")
             .arg(channel).arg(id).arg(delay).arg(ticks / 10.0));
         updateUi();
         dispatchNext();
@@ -677,6 +749,9 @@ private:
         report.seen = clock.elapsed();
         bool testedOk = false, targetOk = false;
         const auto tested = query.queryItemValue("tested").toULongLong(&testedOk);
+        bool totalOk = false;
+        const auto total = query.queryItemValue("total").toULongLong(&totalOk);
+        report.total = totalOk ? QString::number(total) : QString();
         const auto target = query.queryItemValue("target").toULongLong(&targetOk);
         if (testedOk && targetOk && target <= 999999)
             report.cycles = QString("%1 / %2").arg(tested).arg(target == 0 ? QString("不限") : QString::number(target));
@@ -710,7 +785,7 @@ private:
 
     QSettings config{QCoreApplication::applicationDirPath() + "/relay_agent.ini", QSettings::IniFormat};
     QComboBox bind;
-    QTableWidget devices{4, 6};
+    QTableWidget devices{4, 7};
     QSpinBox port;
     QPushButton refreshAddresses{"重新整理本機 IP"}, serial{"RS485 設定及測試"}, listen, cancel{"取消待執行排程"};
     QPushButton startTest{"開始所選 PC 測試"}, stopTest{"停止所選 PC 測試"};
@@ -727,6 +802,7 @@ private:
     QHash<int, bool> contacts;
     QHash<int, qint64> readyAfter;
     QThread *worker = nullptr;
+    QProcess *probe = nullptr;
     RelaySettings serialSettings;
     bool serialReady = false;
     QString serialStatusError;

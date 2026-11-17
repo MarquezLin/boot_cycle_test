@@ -7,6 +7,9 @@ struct EasyPlan {
     bool referenceCompare = false;
     QString referenceVideo;
     int delayMs = 1000;
+    int loopTargetStep = 0;
+    int loopJumpCount = 1;
+    bool stop = false;
     QString expectedText, textCondition = "equalsIgnoreCase";
     int width = 1920, height = 1080;
     double targetFps = 60, tolerance = 1;

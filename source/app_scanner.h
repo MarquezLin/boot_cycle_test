@@ -17,6 +17,7 @@ struct AppControl {
     QString name, id, value, selector, windowTitle, reason;
     int controlType=0;
     bool invoke=false, readable=false, unique=false, enabled=true;
+    QStringList options;
 };
 struct AppScanResult {
     QVector<AppControl> controls;
@@ -53,6 +54,8 @@ private:
     QComboBox *m_windows;
     QComboBox *m_position;
     QComboBox *m_condition,*m_number;
+    QComboBox *m_option;
+    QLabel *m_optionLabel;
     QTableWidget *m_table;
     QLineEdit *m_title,*m_expected;
     QPlainTextEdit *m_instruction,*m_failure;

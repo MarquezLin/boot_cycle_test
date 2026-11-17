@@ -4,16 +4,15 @@
  <widget class="QMainWindow" name="MainWindow">
   <property name="geometry"><rect><x>0</x><y>0</y><width>1240</width><height>900</height></rect></property>
   <property name="minimumSize"><size><width>980</width><height>700</height></size></property>
-  <property name="windowTitle"><string>GVFG 開機循環測試（冷／暖）</string></property>
+  <property name="windowTitle"><string>開機循環測試（冷／暖）</string></property>
   <property name="font"><font><family>Microsoft JhengHei UI</family><pointsize>10</pointsize></font></property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="mainLayout" stretch="0,0,0,1,0">
     <property name="spacing"><number>12</number></property>
     <property name="leftMargin"><number>20</number></property><property name="rightMargin"><number>20</number></property>
     <property name="topMargin"><number>16</number></property><property name="bottomMargin"><number>16</number></property>
-    <item><layout class="QHBoxLayout" name="headerLayout">
-     <item><widget class="QLabel" name="pageTitle"><property name="text"><string>開機循環測試</string></property><property name="styleSheet"><string>font-size: 24px; font-weight: 600; color: #0f172a;</string></property></widget></item>
-     <item><spacer name="headerSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer></item>
+    <item><layout class="QHBoxLayout" name="headerLayout" stretch="1,0,0,0">
+     <item><widget class="QLabel" name="pageTitle"><property name="text"><string>尚未載入腳本</string></property><property name="textFormat"><enum>Qt::PlainText</enum></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string>font-size: 24px; font-weight: 600; color: #0f172a;</string></property></widget></item>
      <item><widget class="QPushButton" name="operatorImportButton"><property name="text"><string>載入測試腳本…</string></property></widget></item>
      <item><widget class="QCheckBox" name="engineeringCheck"><property name="text"><string>工程檢視</string></property></widget></item>
      <item><widget class="QLabel" name="modeLabel"><property name="text"><string>尚未開始</string></property><property name="styleSheet"><string>color: #64748b;</string></property></widget></item>
@@ -45,6 +44,11 @@
           <item><widget class="QPushButton" name="relayButton"><property name="text"><string>控制端 連線設定…</string></property></widget></item>
           <item><layout class="QHBoxLayout" name="cycleLimitLayout"><item><widget class="QLabel" name="cycleLimitLabel"><property name="text"><string>正式測試輪數</string></property></widget></item><item><widget class="QSpinBox" name="cycleLimitSpin"><property name="maximum"><number>999999</number></property><property name="specialValueText"><string>不限</string></property></widget></item></layout></item>
           <item><widget class="QCheckBox" name="continueOnFailureCheck"><property name="text"><string>檢查失敗後，仍繼續下一輪</string></property><property name="toolTip"><string>檢查失敗仍記錄 FAIL；手動停止與電源控制失敗會停止。</string></property></widget></item>
+          <item><layout class="QHBoxLayout" name="startupDelayLayout">
+           <item><widget class="QLabel" name="startupDelayLabel"><property name="text"><string>準備等待（正式測試）</string></property><property name="buddy"><cstring>startupDelaySpin</cstring></property></widget></item>
+           <item><widget class="QSpinBox" name="startupDelaySpin"><property name="maximum"><number>600</number></property><property name="value"><number>20</number></property><property name="suffix"><string> 秒</string></property><property name="keyboardTracking"><bool>false</bool></property></widget></item>
+          </layout></item>
+          <item><widget class="QCheckBox" name="compactReportCheck"><property name="text"><string>正式測試只保留失敗明細與證據</string></property></widget></item>
           <item><widget class="QLabel" name="modeNote"><property name="text"><string>依所選模式執行。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
          </layout></widget></item>
          <item><widget class="QGroupBox" name="startupGroup"><property name="title"><string>03  登入後自動執行</string></property><layout class="QVBoxLayout" name="startupLayout">
@@ -63,7 +67,7 @@
      </widget>
     </widget></item>
     <item><layout class="QHBoxLayout" name="statisticsLayout">
-     <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次</string></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string>color: #64748b; padding-top: 4px;</string></property></widget></item>
+     <item><widget class="QLabel" name="statisticsLabel"><property name="text"><string>累計 0 次</string></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string>color: #1e293b; font-size: 18px; font-weight: 600; padding: 8px;</string></property></widget></item>
      <item><widget class="QPushButton" name="resetStatisticsButton"><property name="text"><string>重設累計次數…</string></property></widget></item>
     </layout></item>
    </layout>

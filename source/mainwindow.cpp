@@ -23,6 +23,8 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QScrollBar>
+#include <QSaveFile>
+#include <QSet>
 #include <QTemporaryFile>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -60,8 +62,21 @@ MainWindow::MainWindow(QWidget *parent)
     ui->stopButton->setStyleSheet("QPushButton {color: #b52323; font-weight: 600;} QPushButton:disabled {color: #94a3b8;}");
     QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     ui->continueOnFailureCheck->setChecked(settings.value("Test/ContinueOnFailure", false).toBool());
+    ui->compactReportCheck->setChecked(settings.value("Report/Compact", true).toBool());
+    connect(ui->compactReportCheck, &QCheckBox::toggled, this, [this](bool enabled) {
+        QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
+        settings.setValue("Report/Compact", enabled);
+    });
     ui->bootModeCombo->setCurrentIndex(settings.value("Test/BootMode", "cold").toString() == "warm" ? 1 : 0);
     ui->cycleLimitSpin->setValue(settings.value("Test/CycleLimit", 0).toInt());
+    ui->startupDelaySpin->setValue(settings.value("Test/StartupDelaySeconds", 20).toInt());
+    connect(ui->startupDelaySpin, &QSpinBox::valueChanged, this, [this] {
+        if (!saveSettings()) {
+            const QSignalBlocker blocker(ui->startupDelaySpin);
+            const QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
+            ui->startupDelaySpin->setValue(settings.value("Test/StartupDelaySeconds", 20).toInt());
+        }
+    });
     const QString flowFile = settings.value("Test/FlowFile").toString();
     if (!flowFile.isEmpty() && !settings.contains("Test/FlowName"))
         m_bootFlowFile = QDir(m_dir).absoluteFilePath(flowFile);
@@ -166,7 +181,7 @@ void MainWindow::startRelaySession()
     });
     auto *heartbeat = new QTimer(this);
     connect(heartbeat, &QTimer::timeout, this, &MainWindow::pollRelayAgent);
-    heartbeat->start(2000);
+    heartbeat->start(1000);
     pollRelayAgent();
 }
 
@@ -193,6 +208,7 @@ QString MainWindow::relayAgentUrl() const
 
 void MainWindow::pollRelayAgent()
 {
+    if (!m_relayNetwork) return;
     const auto now = m_relayClock.elapsed();
     for (auto it = m_discoveredAgents.begin(); it != m_discoveredAgents.end();) {
         if (now - it.value() >= 7000) it = m_discoveredAgents.erase(it);
@@ -225,6 +241,9 @@ void MainWindow::pollRelayAgent()
     else if (m_fail) state = "failed";
     else if (m_pass) state = "passed";
     query.addQueryItem("state", state);
+    query.addQueryItem("total", QString::number(
+        m_formalCount - qMin(m_formalCount, m_statisticsBaseline[0])
+        + m_dryCount - qMin(m_dryCount, m_statisticsBaseline[1])));
     const QSettings run(m_dir + "/test_settings.ini", QSettings::IniFormat);
     const bool hasRun = run.contains("Run/LastFormalCycle");
     const auto last = run.value("Run/LastFormalCycle").toULongLong();
@@ -249,6 +268,10 @@ void MainWindow::pollRelayAgent()
     connect(reply, &QNetworkReply::finished, this, [this, reply, agent] {
         reply->deleteLater();
         m_relayPolling = false;
+        if (m_relayRefreshPending) {
+            m_relayRefreshPending = false;
+            QTimer::singleShot(0, this, &MainWindow::pollRelayAgent);
+        }
         if (reply->error() != QNetworkReply::NoError || relayAgentUrl() != agent) return;
         const auto data = QJsonDocument::fromJson(reply->readAll()).object();
         const QString id = data.value("id").toString();
@@ -276,6 +299,7 @@ bool MainWindow::saveSettings()
     settings.setValue("Test/ContinueOnFailure", ui->continueOnFailureCheck->isChecked());
     settings.setValue("Test/BootMode", warmMode() ? "warm" : "cold");
     settings.setValue("Test/CycleLimit", ui->cycleLimitSpin->value());
+    settings.setValue("Test/StartupDelaySeconds", ui->startupDelaySpin->value());
     settings.remove("Test/TargetExe");
     settings.remove("Test/UseFlow");
     settings.setValue("Test/FlowFile", m_bootFlowFile.isEmpty() ? QString() : QDir(m_dir).relativeFilePath(m_bootFlowFile));
@@ -315,6 +339,11 @@ void MainWindow::refreshBootFlowDisplay(bool preserveResults)
     ui->targetPathEdit->setText(loaded ? flow.executable : QString());
     ui->targetPathEdit->setToolTip(loaded ? flow.executable : QString());
     ui->targetPathEdit->setCursorPosition(0);
+    const QString scriptName = flow.name.trimmed();
+    ui->pageTitle->setText(loaded ? (scriptName.isEmpty() ? QFileInfo(m_bootFlowFile).fileName() : scriptName)
+                                  : QString("尚未載入腳本"));
+    ui->pageTitle->setToolTip(loaded ? QFileInfo(m_bootFlowFile).fileName()
+        + (flow.version.isEmpty() ? QString() : " · 版本 " + flow.version) : QString());
     // The monitor describes the completed run until another run starts or a flow is imported.
     if (preserveResults && m_flowMonitor->hasResults()) {
         ui->modeLabel->setText("保留上次測試結果；編輯內容將於下次測試套用");
@@ -322,8 +351,6 @@ void MainWindow::refreshBootFlowDisplay(bool preserveResults)
     }
     m_flowMonitor->setPlan(loaded ? flowMonitorPlan(flow)
         : QJsonObject{{"error", m_bootFlowFile.isEmpty() ? QString("請先匯入 JSON 流程。") : error}});
-    ui->pageTitle->setText(loaded && !flow.name.isEmpty() ? flow.name : QString("開機循環測試"));
-    ui->pageTitle->setToolTip(loaded ? flow.name + (flow.version.isEmpty() ? QString() : " · 版本 " + flow.version) : QString());
     ui->countLabel->setText(loaded ? QString("%1 個測試項目%2").arg(m_flowMonitor->testItemCount()).arg(flow.version.isEmpty() ? QString() : " · 腳本版本 " + flow.version) : "請先載入測試腳本");
 }
 
@@ -423,8 +450,10 @@ void MainWindow::setRunning(bool running)
     ui->relayButton->setEnabled(!running);
     ui->continueOnFailureCheck->setEnabled(!running);
     ui->cycleLimitSpin->setEnabled(!running);
+    ui->startupDelaySpin->setEnabled(!running);
     ui->targetPathEdit->setEnabled(!running);
     ui->resetStatisticsButton->setEnabled(!running);
+    ui->compactReportCheck->setEnabled(!running);
     const QSettings reportSettings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     ui->exportReportButton->setEnabled(!running && !reportSettings.value("Report/Sessions").toStringList().isEmpty());
     ui->clearButton->setEnabled(ui->exportReportButton->isEnabled());
@@ -456,8 +485,15 @@ void MainWindow::startTest(bool dry, bool automatic)
         return;
     }
     if (!checkEnvironment()) return;
+    TestFlow flow;
+    QString flowError;
+    if (!loadFlow(m_bootFlowFile, flow, flowError)) {
+        setStatus("FAIL — 無法讀取測試腳本：" + flowError, "fail");
+        return;
+    }
+    const bool scriptHasStop = flowHasStop(flow);
     const QString agent = relayAgentUrl();
-    if (!dry && !warmMode()) {
+    if (!dry && !warmMode() && !scriptHasStop) {
         QString error;
         auto relay = loadRelaySettings(m_dir);
         relay.agentUrl = agent;
@@ -513,6 +549,9 @@ void MainWindow::startTest(bool dry, bool automatic)
     auto sessions = settings.value("Report/Sessions").toStringList();
     const auto existingSession = std::find_if(sessions.cbegin(), sessions.cend(),
         [&reportSession](const QString &entry) { return entry.startsWith(reportSession + '|'); });
+    const bool compactReport = !dry && (existingSession == sessions.cend()
+        ? ui->compactReportCheck->isChecked() : settings.value("Report/FormalCompact", false).toBool());
+    if (!dry) settings.setValue("Report/FormalCompact", compactReport);
     const auto entry = existingSession != sessions.cend()
         ? *existingSession : QString("%1|%2|%3|%4").arg(reportSession, dry ? "trial" : "formal",
             warm ? "warm" : "cold", QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
@@ -532,14 +571,20 @@ void MainWindow::startTest(bool dry, bool automatic)
     m_relayReconnecting = false;
     m_shutdownRequested = false;
     m_stoppedByAgent = false;
-    m_flowMonitor->setTailDescription(dry ? "本次為試跑：保存報告，不送電源命令、不關機。" : ui->modeNote->text());
-    m_flowMonitor->begin(dry ? "試跑準備中；依腳本執行，不執行電源動作" : "啟動等待 20 秒，之後執行 JSON 流程");
+    m_scriptStopped = false;
+    m_flowMonitor->setTailDescription(scriptHasStop ? "腳本包含停止測試步驟，本次不執行電源動作。"
+        : dry ? "本次為試跑：保存報告，不送電源命令、不關機。" : ui->modeNote->text());
+    const int startupDelay = bootStartupDelaySeconds(m_dir, dry);
+    const QString preparation = startupDelay == 0 ? QStringLiteral("準備執行 JSON 流程")
+        : QString("啟動等待 %1 秒，之後執行 JSON 流程").arg(startupDelay);
+    m_flowMonitor->begin(preparation);
     ui->modeLabel->setText(QString("%1／%2").arg(dry ? "試跑（不關機）" : "正式測試",
         warm ? "暖重開機" : "冷開機"));
     ui->countLabel->setText("JSON 流程：等待檢查");
-    setStatus(dry ? "檢查中 — 準備執行檢查" : "檢查中 — 等待 20 秒再執行檢查");
+    setStatus("檢查中 — " + preparation);
     QStringList args{"--worker", "--run-directory", m_dir, "--target-exe", target.absoluteFilePath(),
         "--report-session", reportSession};
+    if (compactReport) args << "--compact-report";
     if (ui->continueOnFailureCheck->isChecked()) args << "--continue-on-failure";
     if (dry) args << "--dry-run";
     if (warmMode()) args << "--warm-reboot";
@@ -581,13 +626,13 @@ void MainWindow::startTest(bool dry, bool automatic)
 
 void MainWindow::requestStop(bool fromAgent)
 {
-    QFile marker(m_dir + "/STOP");
-    if (!marker.open(QIODevice::WriteOnly | QIODevice::Truncate)
-        || marker.write("Stop requested from Qt UI\r\n") < 0 || !marker.flush()) {
+    const QByteArray reason = fromAgent ? "Stop requested by Relay Agent\r\n"
+                                        : "Stop requested by local Stop button\r\n";
+    QSaveFile marker(m_dir + "/STOP");
+    if (!marker.open(QIODevice::WriteOnly) || marker.write(reason) != reason.size() || !marker.commit()) {
         QMessageBox::critical(this, "停止失敗", "無法建立 STOP：" + marker.errorString());
         return;
     }
-    marker.close();
     m_stopping = true;
     m_stoppedByAgent = m_stoppedByAgent || fromAgent;
     m_flowMonitor->requestStop();
@@ -708,6 +753,8 @@ void MainWindow::resetStatistics()
     }
     m_statisticsBaseline = totals;
     refreshStatistics();
+    if (m_relayPolling) m_relayRefreshPending = true;
+    else pollRelayAgent();
 }
 
 void MainWindow::manageReports()
@@ -761,10 +808,43 @@ void MainWindow::manageReports()
         auto *viewerLayout = new QVBoxLayout(&viewer);
         auto *browser = new QTextBrowser(&viewer);
         browser->setOpenLinks(false);
-        browser->setHtml(QString::fromUtf8(report.readAll()));
+        const QString html = QString::fromUtf8(report.readAll());
+        const QRegularExpression roundPattern(
+            "<details class='round'><summary>(.*?)</summary>(.*?)</details>",
+            QRegularExpression::DotMatchesEverythingOption);
+        QSet<int> expanded;
+        const auto render = [&] {
+            QString document;
+            qsizetype position = 0;
+            int index = 0;
+            auto matches = roundPattern.globalMatch(html);
+            while (matches.hasNext()) {
+                const auto match = matches.next();
+                document += html.mid(position, match.capturedStart() - position);
+                const bool open = expanded.contains(index);
+                document += QString("<p><a href='gvfg-round:%1'>%2 %3</a></p>")
+                    .arg(index).arg(open ? "▼" : "▶", match.captured(1));
+                if (open) document += match.captured(2);
+                position = match.capturedEnd();
+                ++index;
+            }
+            document += html.mid(position);
+            const int scroll = browser->verticalScrollBar()->value();
+            browser->setHtml(document);
+            browser->verticalScrollBar()->setValue(scroll);
+        };
+        render();
         const auto base = QUrl::fromLocalFile(work + '/');
-        connect(browser, &QTextBrowser::anchorClicked, &viewer, [base](const QUrl &link) {
-            if (link.isRelative()) QDesktopServices::openUrl(base.resolved(link));
+        connect(browser, &QTextBrowser::anchorClicked, &viewer, [&](const QUrl &link) {
+            if (link.scheme() == "gvfg-round") {
+                bool valid = false;
+                const int index = link.path().toInt(&valid);
+                if (!valid) return;
+                if (!expanded.remove(index)) expanded.insert(index);
+                render();
+            } else if (link.isRelative()) {
+                QDesktopServices::openUrl(base.resolved(link));
+            }
         });
         viewerLayout->addWidget(browser);
         auto *close = new QDialogButtonBox(QDialogButtonBox::Close, &viewer);
@@ -823,7 +903,6 @@ void MainWindow::showLine(const QString &line)
         if (document.isObject()) {
             const auto event = document.object();m_flowMonitor->applyEvent(event);
             if (event["event"] == "plan") {
-                if (!event["name"].toString().isEmpty()) ui->pageTitle->setText(event["name"].toString());
                 ui->countLabel->setText(QString("本次共 %1 個測試項目%2").arg(m_flowMonitor->testItemCount())
                     .arg(event["version"].toString().isEmpty() ? QString() : " · 腳本版本 " + event["version"].toString()));
             }
@@ -869,7 +948,9 @@ void MainWindow::showLine(const QString &line)
     } else if (line.contains("Stopped") || line.contains("STOP detected")) {
         m_stopping = true;
         m_stoppedByAgent = m_stoppedByAgent || line.contains("STOP detected by Relay Agent");
-        setStatus(m_stoppedByAgent ? "已由控制端 停止" : "已停止", "stopped");
+        m_scriptStopped = m_scriptStopped || line.contains("STOP detected at scripted stop step; no power action");
+        setStatus(m_scriptStopped ? "依腳本停止測試 — 未關機或重開機"
+            : m_stoppedByAgent ? "已由控制端 停止" : "已停止", "stopped");
     } else if (line.contains("RELAY COUNTDOWN:")) {
         m_flowMonitor->phase("斷電前等待中；現在仍可停止");
         setStatus((m_fail ? QString("FAIL 已記錄 — ") : QString()) + "斷電前倒數中；可按停止", m_fail ? "fail" : "idle");
@@ -915,7 +996,8 @@ void MainWindow::finishTest(int exitCode, QProcess::ExitStatus status)
     }
     if (m_stopping && exitCode == 0 && status == QProcess::NormalExit) {
         m_shutdownRequested = false;
-        QString message = m_stoppedByAgent ? "已由控制端 停止" : "已停止";
+        QString message = m_scriptStopped ? "依腳本停止測試 — 未關機或重開機"
+            : m_stoppedByAgent ? "已由控制端 停止" : "已停止";
         if (m_fail) message += " — 已保存本次 FAIL 紀錄";
         else if (m_pass) message += " — 已保存本次 PASS 紀錄";
         setStatus(message, "stopped");
@@ -933,8 +1015,13 @@ void MainWindow::finishTest(int exitCode, QProcess::ExitStatus status)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (m_running) { requestStop(); event->ignore(); }
-    else event->accept();
+    if (!m_running || m_shutdownRequested || qApp->isSavingSession()) {
+        event->accept();
+        return;
+    }
+    // A close event can race the worker's shutdown log. Only an explicit
+    // stop command may create a persistent STOP marker.
+    event->ignore();
 }
 
 void MainWindow::showExisting()
@@ -1053,6 +1140,17 @@ bool MainWindow::smokeTest()
     const bool importedCounted = m_results == std::array<quint64, 4>{1, 2, 1, 1};
     setRunning(true);
     const bool clearLocked = !ui->clearButton->isEnabled();
+    QCloseEvent closeDuringRun;
+    closeEvent(&closeDuringRun);
+    QFile existingStop(m_dir + "/STOP");
+    const bool closePreservedStop = !closeDuringRun.isAccepted()
+        && existingStop.open(QIODevice::ReadOnly) && existingStop.readAll() == "preserve";
+    existingStop.close();
+    m_shutdownRequested = true;
+    QCloseEvent closeDuringShutdown;
+    closeEvent(&closeDuringShutdown);
+    m_shutdownRequested = false;
+    const bool shutdownCloseAccepted = closeDuringShutdown.isAccepted();
     setRunning(false);
     QString clearError;
     const QString reportSession = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -1071,8 +1169,19 @@ bool MainWindow::smokeTest()
     const QString previewPath = records.filePath("preview.html");
     const bool previewed = staged && !previewBootSession(m_dir, reportSession, true, true, previewPath, clearError).isEmpty()
         && QFile::exists(previewPath) && !QDir(m_dir + "/reports").exists();
+    QFile compactMarker(work + "/compact_report");
+    const bool markedCompact = staged && compactMarker.open(QIODevice::WriteOnly);
+    compactMarker.close();
+    const bool compactPreview = markedCompact
+        && !previewBootSession(m_dir, reportSession, true, true, previewPath, clearError).isEmpty()
+        && [&] {
+            QFile preview(previewPath);
+            if (!preview.open(QIODevice::ReadOnly)) return false;
+            const auto html = QString::fromUtf8(preview.readAll());
+            return html.contains("失敗原因統計") && !html.contains("通過（PASS）");
+        }();
     const QString exported = staged ? exportBootSession(m_dir, reportSession, true, true, clearError) : QString();
-    const bool cleared = previewed && !exported.isEmpty() && exported.contains("/reports/trial/warm/")
+    const bool cleared = previewed && compactPreview && !exported.isEmpty() && exported.contains("/reports/trial/warm/")
         && clearRecordFiles(reportSession, clearError) && !QDir(work).exists() && QDir(otherWork).exists()
         && QFile::exists(exported + "/boot_cycle_report.html") && QFile::exists(exported + "/evidence/round_1/result.txt")
         && QFile::exists(m_dir + "/boot_cycle_detail.log")
@@ -1109,7 +1218,8 @@ bool MainWindow::smokeTest()
     const bool importedOk = saveFlow(source, imported, importedError) && importBootFlow(source);
     const bool importedValid = importedOk && validateBootFlow(importedError)
         && loadFlow(m_bootFlowFile, saved, importedError) && saved.steps.size() == 1 && saved.steps[0].name == delay.name
-        && ui->pageTitle->text() == imported.name && m_flowMonitor->testItemCount() == 1
+        && ui->pageTitle->text() == imported.name && ui->pageTitle->toolTip().contains("test1.json")
+        && m_flowMonitor->testItemCount() == 1
         && ui->targetPathEdit->text() == imported.executable
         && saved.testItems.size() == 1 && saved.steps[0].testItemId == "saved";
     QSettings importedSettings(m_dir + "/test_settings.ini", QSettings::IniFormat);
@@ -1136,7 +1246,7 @@ bool MainWindow::smokeTest()
     m_bootFlowFile = previousFlowFile;
     refreshBootFlowDisplay();
     const bool nextPlanCleared=!m_flowMonitor->hasResults();
-    return operatorDefault && engineeringLocked && monitor && resultRetained && nextPlanCleared && pass && fail && locked && idle && warm && cold && unconfigured && history && clearLocked && cleared && reset
+    return operatorDefault && engineeringLocked && monitor && resultRetained && nextPlanCleared && pass && fail && locked && idle && warm && cold && unconfigured && history && clearLocked && closePreservedStop && shutdownCloseAccepted && cleared && reset
         && importWithoutTarget && importedValid && persisted && noPartialPass && flowPass && partialNotCounted && importedCounted
         && ui->bootModeCombo->count() == 2;
 }
@@ -1156,7 +1266,7 @@ bool MainWindow::monitorPreview(const QString &state)
         {"audio", "確認音訊資料接收", "請保持訊號源開啟及 HDMI 線連接，不需操作。", "正在等待音訊資料，最長約 30 秒。", "確認訊號源已開啟音訊輸出，並檢查 HDMI 線。仍失敗時請通知工程人員。"}};
     flow.steps[0].testItemId = flow.steps[1].testItemId = "app";
     flow.steps[2].testItemId = "start"; flow.steps[3].testItemId = "audio";
-    ui->pageTitle->setText(flow.name);ui->countLabel->setText("腳本版本 1.0 · 畫面示範");
+    ui->countLabel->setText("腳本版本 1.0 · 畫面示範");
     m_flowMonitor->setPlan(flowMonitorPlan(flow));
     m_flowMonitor->setTailDescription("試跑：保存報告，不關機。");
     ui->bootFlowPathEdit->setText("示範流程.json");ui->targetPathEdit->setText("待測 APP.exe");

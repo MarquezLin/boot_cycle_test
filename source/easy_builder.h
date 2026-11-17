@@ -6,7 +6,8 @@ namespace Ui {class EasyBuilder;}
 class EasyBuilder final : public QDialog {
     Q_OBJECT
 public:
-    explicit EasyBuilder(QWidget *parent = nullptr, bool insertion = false);
+    explicit EasyBuilder(QWidget *parent = nullptr, bool insertion = false,
+        const QStringList &loopTargets = {}, const FlowStep *editLoop = nullptr);
     ~EasyBuilder() override;
     EasyPlan plan() const;
     bool append() const;

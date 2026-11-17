@@ -21,6 +21,7 @@ bool checkRelayAgent(const RelaySettings &settings, int &channel, QString &error
 bool scheduleRelayAgent(const RelaySettings &settings, QString &requestId, QString &error, bool &stoppedByAgent,
     bool *retryable = nullptr);
 bool cancelRelayAgent(const RelaySettings &settings, const QString &requestId, QString &error);
+QString relayAgentRequestState(const RelaySettings &settings, const QString &requestId, QString &error);
 bool sendRelayPulse(const RelaySettings &settings,
     const std::function<void(const QString &)> &log, QString &error);
 bool relaySelfTest();

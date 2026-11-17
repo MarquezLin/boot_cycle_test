@@ -1,13 +1,16 @@
 #include <windows.h>
 #include "boot_flow_runner.h"
+#include "flow_model.h"
 #include "relay_controller.h"
 #include <QFile>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QDir>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSettings>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -32,9 +35,10 @@ namespace {
 
 std::wstring resultContext;
 fs::path reportWork;
+std::wstring roundFailure;
 constexpr auto kResultHeader = "time,result,received_frames,detail\r\n";
 
-constexpr DWORD kStartupDelaySeconds = 20;
+constexpr int kStartupDelaySeconds = 20;
 
 std::wstring nowText()
 {
@@ -86,6 +90,7 @@ bool appendDetail(const fs::path &dir, const std::wstring &message)
 bool appendResult(const fs::path &dir, const std::wstring &result,
                   unsigned long long received, const std::wstring &detail)
 {
+    if (result == L"FAIL" && roundFailure.empty()) roundFailure = detail;
     std::string clean = narrow(resultContext + detail);
     for (char &ch : clean) {
         if (ch == '\r' || ch == '\n' || ch == ',') ch = ' ';
@@ -137,19 +142,33 @@ bool writeReport(const fs::path &dir, const QString &ending, bool dryRun = false
                  const QString &output = {})
 {
     const auto root = QString::fromStdWString(dir.wstring());
+    const bool compact = QFileInfo::exists(root + "/compact_report");
     QFile results(root + "/boot_cycle_results.csv");
     QFile log(root + "/boot_cycle_detail.log");
     if ((results.exists() && !results.open(QIODevice::ReadOnly)) || !log.open(QIODevice::ReadOnly))
         return false;
 
     QString rows;
+    struct RoundReport { QString time, status, items; };
+    QMap<quint64, RoundReport> roundReports;
+    const QRegularExpression roundNumber(QStringLiteral("^Cycle=(\\d+);"));
     int passed = 0;
     int failed = 0;
+    QString firstTime, lastTime;
+    struct FailureCount { int count = 0; QString first, last; };
+    QMap<QString, FailureCount> failures;
     while (results.isOpen() && !results.atEnd()) {
         const auto fields = QString::fromUtf8(results.readLine()).trimmed().split(',');
         if (fields.size() != 4 || (fields[1] != "PASS" && fields[1] != "FAIL")) continue;
         passed += fields[1] == "PASS";
         failed += fields[1] == "FAIL";
+        const auto number = roundNumber.match(fields[3]);
+        if (number.hasMatch()) {
+            auto &round = roundReports[number.captured(1).toULongLong()];
+            round.time = fields[0];
+            if (round.status != "FAIL") round.status = fields[1];
+        }
+        if (compact && fields[1] == "PASS") continue;
         rows += "<tr>";
         for (qsizetype i = 0; i < fields.size(); ++i) {
             const auto &field = fields[i];
@@ -171,24 +190,44 @@ bool writeReport(const fs::path &dir, const QString &ending, bool dryRun = false
     QVector<ItemResult> readable;QVector<int> stepRows;QJsonArray planSteps;
     QString steps;
     int rounds = 0;
+    int stopped = 0;
     QString cycle;
     QString step;
     const QRegularExpression cycleHeader(QStringLiteral("^Cycle=(\\d+);.*FailurePolicy="));
+    const QRegularExpression failureContext(QStringLiteral("^Cycle=(\\d+); Mode=\\w+; DryRun=\\w+; "));
     const auto addStep = [&](const QString &result) {
         if (step.isEmpty()) return;
-        steps += "<tr><td>" + cycle + "</td><td>" + step.toHtmlEscaped()
-            + "</td><td>" + result + "</td></tr>";
+        if (!compact || result != "PASS")
+            steps += "<tr><td>" + cycle + "</td><td>" + step.toHtmlEscaped()
+                + "</td><td>" + result + "</td></tr>";
         step.clear();
     };
     while (!log.atEnd()) {
         const auto line = QString::fromUtf8(log.readLine()).trimmed();
         const auto separator = line.indexOf(" | ");
         if (separator < 0) continue;
+        if (firstTime.isEmpty()) firstTime = line.left(separator);
+        lastTime = line.left(separator);
         const auto message = line.mid(separator + 3);
         if (message == "Boot check started" || message == "Dry-run started") ++rounds;
+        if (message.startsWith("Stopped") || message.startsWith("STOP detected")) {
+            ++stopped;
+            if (!cycle.isEmpty() && roundReports[cycle.toULongLong()].status.isEmpty())
+                roundReports[cycle.toULongLong()].status = "停止";
+        }
+        if (compact && message.startsWith("FAIL:")) {
+            QString reason = message.mid(6);
+            const auto context = failureContext.match(reason);
+            const QString failureCycle = context.hasMatch() ? context.captured(1) : cycle;
+            if (context.hasMatch()) reason.remove(0, context.capturedLength());
+            auto &failure = failures[reason];
+            if (failure.count++ == 0) failure.first = failureCycle;
+            failure.last = failureCycle;
+        }
         if(message.startsWith("FLOW_EVENT ")){
             const auto event=QJsonDocument::fromJson(message.mid(11).toUtf8()).object();
             if(event["event"]=="plan"){
+                if (compact) readable.removeIf([](const ItemResult &item) { return !item.failed && !item.stopped; });
                 planSteps=event["steps"].toArray();stepRows.clear();QMap<QString,QJsonObject> items;QMap<QString,int> groups;
                 for(const auto &value:event["testItems"].toArray()){const auto item=value.toObject();items.insert(item["id"].toString(),item);}
                 for(int i=0;i<planSteps.size();++i){const auto entry=planSteps[i].toObject();const QString id=entry["testItemId"].toString();
@@ -215,6 +254,8 @@ bool writeReport(const fs::path &dir, const QString &ending, bool dryRun = false
         if (match.hasMatch()) {
             addStep(QStringLiteral("未完成"));
             cycle = match.captured(1);
+            auto &round = roundReports[cycle.toULongLong()];
+            if (round.time.isEmpty()) round.time = line.left(separator);
         } else if (message.startsWith(QStringLiteral("FLOW | 步驟 "))) {
             addStep(QStringLiteral("未完成"));
             step = message.mid(7);
@@ -228,23 +269,54 @@ bool writeReport(const fs::path &dir, const QString &ending, bool dryRun = false
     if (results.error() != QFileDevice::NoError || log.error() != QFileDevice::NoError) return false;
 
     QString itemRows;
-    for(const auto &item:readable){QString explanation;
+    for(const auto &item:readable){if(compact && !item.failed && !item.stopped) continue; QString explanation;
         for(const auto &observation:item.observations)explanation+="<div>"+QString(observation.toHtmlEscaped()).replace('\n',"<br>")+"</div>";
         if(explanation.isEmpty())explanation="尚未執行此項目。";
         if(item.failed && !item.hint.isEmpty())explanation+="<p><b>處理方式：</b>"+item.hint.toHtmlEscaped()+"</p>";
-        itemRows+="<tr><td>"+item.cycle.toHtmlEscaped()+"</td><td>"+item.name.toHtmlEscaped()+"</td><td class='"+(item.failed?QString("fail"):item.state.startsWith("通過")?QString("pass"):QString("pending"))+"'>"+item.state.toHtmlEscaped()+"</td><td>"+explanation+"</td></tr>";
+        const auto row = "<tr><td>"+item.cycle.toHtmlEscaped()+"</td><td>"+item.name.toHtmlEscaped()+"</td><td class='"+(item.failed?QString("fail"):item.state.startsWith("通過")?QString("pass"):QString("pending"))+"'>"+item.state.toHtmlEscaped()+"</td><td>"+explanation+"</td></tr>";
+        if (item.cycle.isEmpty()) itemRows += row;
+        else roundReports[item.cycle.toULongLong()].items += row;
     }
-    const QString readableSection=itemRows.isEmpty()?QString():"<h2>測試項目與判定說明</h2><table><thead><tr><th>輪次</th><th>測試項目</th><th>結果</th><th>實測結果／未通過原因</th></tr></thead><tbody>"+itemRows+"</tbody></table>";
+    const auto itemTable = [](const QString &items) {
+        return "<table><thead><tr><th>輪次</th><th>測試項目</th><th>結果</th><th>實測結果／未通過原因</th></tr></thead><tbody>"+items+"</tbody></table>";
+    };
+    QString readableSection = itemRows.isEmpty() ? QString() : itemTable(itemRows);
+    if (!roundReports.isEmpty()) readableSection += "<h2>測試輪次</h2>";
+    for (auto it = roundReports.cbegin(); it != roundReports.cend(); ++it) {
+        const auto &round = it.value();
+        const QString status = round.status.isEmpty() ? "未完成" : round.status;
+        const QString style = status == "PASS" ? "pass" : status == "FAIL" ? "fail" : "pending";
+        const QString content = round.items.isEmpty()
+            ? (compact && status == "PASS" ? "<p>本輪通過，長測模式保留輪次摘要與 CSV 紀錄。</p>"
+                                           : "<p>本輪沒有測試項目明細。</p>")
+            : itemTable(round.items);
+        readableSection += QString("<details class='round'><summary>第 %1 輪 · <b class='%2'>%3</b> · %4</summary>%5</details>")
+            .arg(it.key()).arg(style, status, round.time.toHtmlEscaped(), content);
+    }
     QString navigation;
+    if (compact) {
+        navigation = QString("<p>紀錄期間 %1 ～ %2 ｜ 停止紀錄 %3</p>")
+            .arg(firstTime.toHtmlEscaped(), lastTime.toHtmlEscaped()).arg(stopped);
+        if (!failures.isEmpty()) {
+            navigation += "<h2>失敗原因統計</h2><ul>";
+            for (auto it = failures.cbegin(); it != failures.cend(); ++it)
+                navigation += QString("<li>%1 ｜ %2 次 ｜ 首次輪次 %3 ｜ 最近輪次 %4</li>")
+                    .arg(it.key().toHtmlEscaped()).arg(it->count).arg(it->first, it->last);
+            navigation += "</ul>";
+        }
+    }
     if (!scope.isEmpty()) {
-        navigation = "<p><a href='boot_cycle_detail.log'>詳細紀錄</a>";
+        navigation += "<p><a href='boot_cycle_detail.log'>詳細紀錄</a>";
         if (results.exists()) navigation += " ｜ <a href='boot_cycle_results.csv'>結果 CSV</a>";
         const QDir evidence(root + "/evidence");
         if (evidence.exists()) {
             navigation += "</p><p>逐輪證據：";
             for (const auto &name : evidence.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
                 const auto href = QString::fromLatin1(QUrl::toPercentEncoding(name));
-                navigation += " <a href='evidence/" + href + "/'>" + name.toHtmlEscaped() + "</a>";
+                QString label = name;
+                if (compact && name.contains("_first_round_")) label = "首次失敗 · " + name.section("_first_", 1);
+                if (compact && name.contains("_latest_round_")) label = "最近失敗 · " + name.section("_latest_", 1);
+                navigation += " <a href='evidence/" + href + "/'>" + label.toHtmlEscaped() + "</a>";
             }
         }
         navigation += "</p>";
@@ -402,19 +474,30 @@ bool regenerateBootReport(const QString &directory){
     return writeReport(fs::path(directory.toStdWString()),"既有紀錄重新產生（沒有重新執行測試）",true);
 }
 
+int bootStartupDelaySeconds(const QString &directory, bool dryRun)
+{
+    if (dryRun) return 1;
+    const QSettings settings(directory + "/test_settings.ini", QSettings::IniFormat);
+    bool valid = false;
+    const int seconds = settings.value("Test/StartupDelaySeconds", kStartupDelaySeconds).toInt(&valid);
+    return valid ? qBound(0, seconds, 600) : kStartupDelaySeconds;
+}
+
 int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
 {
     resultContext.clear();
     reportWork.clear();
     const auto resetReportWork = qScopeGuard([] { reportWork.clear(); });
     fs::path dir(directory.toStdWString());
-    bool dryRun = false, warmReboot = false, describeAction = false, continueOnFailure = false;
+    bool dryRun = false, warmReboot = false, describeAction = false, continueOnFailure = false, compactReport = false;
+    roundFailure.clear();
     fs::path targetExe, flowFile;
     QString agentUrl, reportSession;
     quint64 lastFormalCycle = 0;
     for (int i = 1; i < argc; ++i) {
         const std::wstring arg(argv[i]);
         if (arg == L"--dry-run") dryRun = true;
+        else if (arg == L"--compact-report") compactReport = true;
         else if (arg == L"--continue-on-failure") continueOnFailure = true;
         else if (arg == L"--warm-reboot") warmReboot = true;
         else if (arg == L"--describe-action") describeAction = true;
@@ -472,6 +555,15 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
         return 1;
     }
     if (!managedWork.isEmpty()) reportWork = fs::path(managedWork.toStdWString());
+    compactReport = compactReport && !managedWork.isEmpty();
+    if (compactReport) {
+        QSaveFile marker(managedWork + "/compact_report");
+        if (!marker.open(QIODevice::WriteOnly) || !marker.commit()) {
+            appendDetail(dir, L"FAIL: Cannot save report retention mode");
+            CloseHandle(mutex);
+            return 1;
+        }
+    }
     const bool legacyTrial = dryRun && managedWork.isEmpty();
     const auto dryFolder = legacyTrial ? createDryRunFolder(root) : QString();
     if (legacyTrial && dryFolder.isEmpty()) {
@@ -516,6 +608,15 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
     }
     appendDetail(dir, L"Target EXE: " + targetExe.wstring());
 
+    TestFlow flow;
+    QString flowError;
+    if (!loadFlow(QString::fromStdWString(flowFile.wstring()), flow, flowError)) {
+        markFailure(dir, flowError.toStdWString());
+        return finishRun(QStringLiteral("無法載入 JSON 流程"), 1);
+    }
+    const bool scriptHasStop = flowHasStop(flow);
+    if (scriptHasStop) continueOnFailure = false;
+
     appendDetail(dir, warmReboot ? L"Mode=warm (Windows restart)" : L"Mode=cold (external power cycle)");
     unsigned long long cycle = 1;
     quint64 formalCycles = 0;
@@ -558,7 +659,7 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
         }
         return false;
     };
-    if (!dryRun && remoteRelay) {
+    if (!dryRun && remoteRelay && !scriptHasStop) {
         int channel = 0;
         QString problem;
         if (!withRelayReconnect([&](bool &retryable) {
@@ -577,7 +678,9 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
         + (dryRun ? L"DryRun=true; " : L"DryRun=false; ");
     appendDetail(dir, dryRun ? L"Dry-run started" : L"Boot check started");
     appendDetail(dir, resultContext + (continueOnFailure ? L"FailurePolicy=continue" : L"FailurePolicy=stop"));
-    if (!waitInterruptible(dir, dryRun ? 1 : kStartupDelaySeconds)) {
+    const int startupDelay = bootStartupDelaySeconds(root, dryRun);
+    appendDetail(dir, L"Startup delay before application launch: " + std::to_wstring(startupDelay) + L" seconds");
+    if (!waitInterruptible(dir, startupDelay)) {
         appendDetail(dir, L"Stopped before application launch");
         return finishRun(QStringLiteral("測試已停止"), 0);
     }
@@ -587,9 +690,51 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
     appendDetail(dir, L"Running JSON flow: " + flowPath);
     const QString evidence = !managedWork.isEmpty() ? managedWork + QString("/evidence/round_%1").arg(cycle, 6, 10, QChar('0'))
         : legacyTrial ? dryFolder + "/evidence" : QString();
-    const int checkResult = executeBootFlow(flowFile.wstring(), dir.wstring(), targetExe.wstring(),
+    const int checkResult = executeBootFlow(flow, dir.wstring(), targetExe.wstring(),
         [&](const std::wstring &message) {appendDetail(dir, message);}, error,
         evidence.toStdWString());
+    const auto retainEvidence = qScopeGuard([&] {
+        if (!compactReport || checkResult == 2 || checkResult == BootFlowScriptStopped || !QDir(evidence).exists()) return;
+        QString problem;
+        const auto folder = QFileInfo(evidence);
+        const QFileInfo evidenceRoot(folder.absolutePath());
+        if (evidenceRoot.isSymLink() || evidenceRoot.isJunction()
+            || !folder.absoluteFilePath().startsWith(QDir(managedWork).absolutePath() + "/evidence/")) return;
+        if (folder.isSymLink() || folder.isJunction() || !reportTree(evidence, {}, problem)) return;
+        if (roundFailure.empty() && checkResult == 0) {
+            if (!QDir(evidence).removeRecursively()) appendDetail(dir, L"REPORT: Cannot prune PASS evidence");
+            return;
+        }
+        const auto reason = QString::fromStdWString(roundFailure.empty() ? error : roundFailure);
+        const auto key = QString::fromLatin1(QCryptographicHash::hash(reason.toUtf8(), QCryptographicHash::Sha256).toHex());
+        QDir parent(folder.absolutePath());
+        const auto first = parent.entryList({key + "_first_*"}, QDir::Dirs);
+        const auto previous = parent.entryList({key + "_latest_*"}, QDir::Dirs);
+        const auto name = key + (first.isEmpty() ? "_first_" : "_latest_") + folder.fileName();
+        if (!parent.rename(folder.fileName(), name)) {
+            appendDetail(dir, L"REPORT: Cannot label failure evidence");
+            return;
+        }
+        for (const auto &old : previous) {
+            if (old == name) continue;
+            const auto path = parent.filePath(old);
+            const QFileInfo info(path);
+            if (!info.isSymLink() && !info.isJunction() && reportTree(path, {}, problem)
+                && !QDir(path).removeRecursively()) appendDetail(dir, L"REPORT: Cannot prune repeated failure evidence");
+        }
+    });
+    if (checkResult == BootFlowScriptStopped) {
+        if (!dryRun) {
+            QSaveFile marker(root + "/STOP");
+            const QByteArray reason("Script stop reached\r\n");
+            if (!marker.open(QIODevice::WriteOnly) || marker.write(reason) != reason.size() || !marker.commit()) {
+                markFailure(dir, L"Cannot save scripted stop marker");
+                return finishRun(QStringLiteral("無法保存腳本停止狀態"), 1);
+            }
+        }
+        appendDetail(dir, L"STOP detected at scripted stop step; no power action");
+        return finishRun(QStringLiteral("依腳本停止測試，未執行電源動作"), 0);
+    }
     if (checkResult == 2)
         appendDetail(dir, L"STOP detected during JSON flow; no power action");
     if (checkResult == 0) {

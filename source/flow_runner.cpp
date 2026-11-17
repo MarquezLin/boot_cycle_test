@@ -20,6 +20,7 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QSet>
+#include <QScopeGuard>
 #include <memory>
 
 namespace {
@@ -129,6 +130,107 @@ bool keyboard(HWND window, const QString &text, bool shortcut, QString &error)
     if (SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) != static_cast<UINT>(inputs.size())) {error = "鍵盤輸入失敗，請檢查 APP 與工具的權限是否一致"; return false;}
     return true;
 }
+}
+QStringList flowComboOptions(IUIAutomation *automation, IUIAutomationElement *combo,
+                             const QString &selection, QString &error)
+{
+    CONTROLTYPEID type = 0;
+    if (FAILED(combo->get_CurrentControlType(&type)) || type != UIA_ComboBoxControlTypeId) {
+        error = "指定的控制項不是下拉選單";
+        return {};
+    }
+    IUIAutomationExpandCollapsePattern *expandRaw = nullptr;
+    combo->GetCurrentPatternAs(UIA_ExpandCollapsePatternId, IID_PPV_ARGS(&expandRaw));
+    Com<IUIAutomationExpandCollapsePattern> expand(expandRaw);
+    ExpandCollapseState state = ExpandCollapseState_LeafNode;
+    const bool opened = expand && SUCCEEDED(expand->get_CurrentExpandCollapseState(&state))
+        && state == ExpandCollapseState_Collapsed && SUCCEEDED(expand->Expand());
+    const auto restore = qScopeGuard([&] {
+        if (opened && SUCCEEDED(expand->get_CurrentExpandCollapseState(&state))
+            && state != ExpandCollapseState_Collapsed) expand->Collapse();
+    });
+    IUIAutomationCondition *conditionRaw = nullptr;
+    automation->CreateTrueCondition(&conditionRaw);
+    Com<IUIAutomationCondition> condition(conditionRaw);
+    int count = 0, matches = 0;
+    Com<IUIAutomationElementArray> items;
+    for (int attempt = 0; condition && attempt < (opened ? 6 : 1); ++attempt) {
+        if (attempt) Sleep(50);
+        IUIAutomationElementArray *itemsRaw = nullptr;
+        combo->FindAll(TreeScope_Descendants, condition.get(), &itemsRaw);
+        items.reset(itemsRaw);
+        if (items) items->get_Length(&count);
+        if (count > 1) break;
+    }
+    QStringList options;
+    Com<IUIAutomationSelectionItemPattern> selected;
+    Com<IUIAutomationElement> selectedElement;
+    for (int i = 0; i < count; ++i) {
+        IUIAutomationElement *itemRaw = nullptr;
+        items->GetElement(i, &itemRaw);
+        Com<IUIAutomationElement> item(itemRaw);
+        if (!item) continue;
+        IUIAutomationSelectionItemPattern *pattern = nullptr;
+        item->GetCurrentPatternAs(UIA_SelectionItemPatternId, IID_PPV_ARGS(&pattern));
+        Com<IUIAutomationSelectionItemPattern> option(pattern);
+        if (!option) continue;
+        BSTR nameRaw = nullptr;
+        item->get_CurrentName(&nameRaw);
+        const auto name = bstrText(nameRaw);
+        if (name.isEmpty()) continue;
+        options.append(name);
+        if (!selection.isEmpty() && name == selection) {
+            ++matches;
+            selected = std::move(option);
+            selectedElement = std::move(item);
+        }
+    }
+    if (!selection.isEmpty()) {
+        const auto valueMatches = [&] {
+            IUIAutomationValuePattern *raw = nullptr;
+            combo->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&raw));
+            Com<IUIAutomationValuePattern> value(raw);
+            BSTR text = nullptr;
+            if (value) value->get_CurrentValue(&text);
+            return bstrText(text) == selection;
+        };
+        if (matches == 0) error = "找不到下拉選項：" + selection;
+        else if (matches != 1) error = "下拉選項名稱重複：" + selection;
+        else if (!valueMatches()) {
+            selected->Select();
+            if (!valueMatches()) {
+                POINT point{};
+                BOOL clickable = FALSE;
+                selectedElement->GetClickablePoint(&point, &clickable);
+                if (!clickable) {
+                    RECT bounds{};
+                    if (SUCCEEDED(selectedElement->get_CurrentBoundingRectangle(&bounds))
+                        && bounds.right > bounds.left && bounds.bottom > bounds.top) {
+                        point = {bounds.left + (bounds.right - bounds.left) / 2,
+                                 bounds.top + (bounds.bottom - bounds.top) / 2};
+                        clickable = TRUE;
+                    }
+                }
+                if (clickable) {
+                    IUIAutomationElement *hitRaw = nullptr;
+                    automation->ElementFromPoint(point, &hitRaw);
+                    Com<IUIAutomationElement> hit(hitRaw);
+                    BOOL same = FALSE;
+                    if (hit) automation->CompareElements(hit.get(), selectedElement.get(), &same);
+                    if (same && SetCursorPos(point.x, point.y)) {
+                        INPUT input[2]{};
+                        input[0].type = input[1].type = INPUT_MOUSE;
+                        input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+                        input[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                        if (SendInput(2, input, sizeof(INPUT)) == 2)
+                            for (int attempt = 0; attempt < 5 && !valueMatches(); ++attempt) Sleep(50);
+                    }
+                }
+            }
+            if (!valueMatches()) error = "無法確認已選取：" + selection;
+        }
+    }
+    return options;
 }
 QVector<FlowWindowInfo> flowWindows(const QString &executable, quint32 pid)
 {
@@ -274,12 +376,63 @@ void FlowRunner::run()
         Com<IUIAutomation> automation(raw);
         HWND window = reinterpret_cast<HWND>(findFlowWindow(flow.executable));
         quint32 pid = 0; QString value = initialValue; bool hasValue = !initialValue.isNull(), success = true;
+        bool scriptStopped = false;
         QDir().mkpath(evidenceDirectory);
         const int first = singleStep < 0 ? 0 : singleStep, last = singleStep < 0 ? static_cast<int>(flow.steps.size()) : singleStep + 1;
-        for (int index = first; index < last && !m_stop; ++index) {
+        QVector<int> jumps(flow.steps.size(), 0);
+        QVector<quint64> visits(flow.steps.size(), 0);
+        QVector<int> activeLoops;
+        const auto failureContext = [&](int index, const QString &message) {
+            QStringList context;
+            for (const int loopIndex : activeLoops) {
+                const auto &loop = flow.steps[loopIndex];
+                if (index >= loop.targetStep - 1 && index < loopIndex)
+                    context.append(QString("第 %1 步迴圈的第 %2/%3 次跳轉後")
+                        .arg(loopIndex + 1).arg(jumps[loopIndex]).arg(loop.jumpCount));
+            }
+            if (context.isEmpty()) return message;
+            return QString("第 %1 步失敗（%2）：%3").arg(index + 1).arg(context.join("、"), message);
+        };
+        for (int next = first; next < last && !m_stop;) {
+            const int index = next++;
             const auto &s = flow.steps[index]; QString error, detail;
             emit stepStarted(index);
             emit progress(QString("步驟 %1：%2 — %3").arg(index + 1).arg(flowTypeName(s.type), s.name));
+            if (s.type == "stop") {
+                if (singleStep >= 0) {
+                    emit stepFinished(index, "PASS", "單步試跑：已確認停止測試步驟");
+                } else {
+                    scriptStopped = true;
+                    emit stepFinished(index, "STOP", "依腳本停止測試，不關機或重開機");
+                    emit scriptStopReached();
+                }
+                break;
+            }
+            if (s.type == "loop") {
+                if (s.targetStep < 1 || s.targetStep > index || s.jumpCount < 0) {
+                    detail = "無效的跳轉目標或跳轉次數";
+                    emit stepFinished(index, "FAIL", detail);
+                    emit progress("FAIL: " + detail);
+                    success = false;
+                    break;
+                }
+                if (singleStep >= 0) {
+                    detail = QString("單步試跑：已檢查跳轉至第 %1 步，共 %2 次").arg(s.targetStep).arg(s.jumpCount);
+                } else if (jumps[index] < s.jumpCount) {
+                    next = s.targetStep - 1;
+                    if (!activeLoops.contains(index)) activeLoops.append(index);
+                    detail = QString("跳轉至第 %1 步（%2/%3）").arg(s.targetStep).arg(++jumps[index]).arg(s.jumpCount);
+                } else {
+                    activeLoops.removeOne(index);
+                    detail = QString("已完成 %1 次跳轉，繼續執行").arg(s.jumpCount);
+                }
+                emit stepFinished(index, "PASS", detail);
+                emit progress("PASS: " + detail);
+                continue;
+            }
+            const auto visit = ++visits[index];
+            QString evidenceBase = evidenceDirectory + QString("/step_%1").arg(index + 1);
+            if (visit > 1) evidenceBase += QString("_run_%1").arg(visit);
             QElapsedTimer timer; timer.start(); bool ok = false;
             WindowCapture backgroundCapture;
             bool capturePrepared=false;
@@ -306,8 +459,9 @@ void FlowRunner::run()
                     if(!window){error=flowWindowError(flow.executable,pid,s.windowTitle);ready=false;}
                     else ready=prepareCapture(error);
                 }
-                if(ready)ok=offlineImageStep(s,evidenceDirectory+QString("/step_%1").arg(index+1),replayCaptureFile,capture,
+                if(ready)ok=offlineImageStep(s,evidenceBase,replayCaptureFile,capture,
                     [this,index](const QString &message){emit stepObserved(index,message);},m_stop,detail,error);
+                if (!ok && !m_stop) error = failureContext(index, error);
                 emit stepFinished(index,m_stop?"STOP":ok?"PASS":"FAIL",ok?detail:error+"\n"+detail);
                 emit progress((m_stop?"STOP: ":ok?"PASS: ":"FAIL: ")+(ok?detail:error));
                 if(m_stop || !ok){success=false;break;}
@@ -340,7 +494,7 @@ void FlowRunner::run()
                     ok = !m_stop;
                 } else {
                     window = reinterpret_cast<HWND>(findFlowWindow(flow.executable, pid, s.windowTitle));
-                    if (!window && s.type != "clickUIA" && s.type != "readUIA") {
+                    if (!window && s.type != "clickUIA" && s.type != "readUIA" && s.type != "selectUIA") {
                         error = flowWindowError(flow.executable, pid, s.windowTitle);
                         if ((s.type == "readOCR" || s.type == "checkImage" || s.type == "checkVideo") && timer.elapsed() < s.timeoutMs) {
                             emit stepObserved(index, "等待待測視窗出現：" + s.windowTitle);
@@ -348,7 +502,7 @@ void FlowRunner::run()
                         }
                         break;
                     }
-                    if (s.type == "clickUIA" || s.type == "readUIA") {
+                    if (s.type == "clickUIA" || s.type == "readUIA" || s.type == "selectUIA") {
                         if (FAILED(created) || !automation) {error = "無法初始化 UI Automation"; break;}
                         auto element = window ? locate(automation.get(), window, s, error) : Com<IUIAutomationElement>();
                         if (!window) error = flowWindowError(flow.executable, pid, s.windowTitle);
@@ -377,6 +531,10 @@ void FlowRunner::run()
                                     Com<IUIAutomationInvokePattern> invoke(invokeRaw); ok = SUCCEEDED(invoke->Invoke());
                                 }
                                 if (!ok) error = "控制項不支援 Invoke 或點擊失敗，請改用位置點擊";
+                            } else if (s.type == "selectUIA") {
+                                flowComboOptions(automation.get(), element.get(), s.text, error);
+                                ok = error.isEmpty();
+                                if (ok) detail = "已選取：" + s.text;
                             } else {
                                 IUIAutomationValuePattern *valueRaw = nullptr; BSTR text = nullptr;
                                 if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&valueRaw))) && valueRaw) {
@@ -406,9 +564,9 @@ void FlowRunner::run()
                             msleep(100); continue;
                         }
                         if (!image.rect().contains(s.region)) {error = "OCR 區域超出目前視窗，請重新框選"; break;}
-                        const auto path = evidenceDirectory + QString("/step_%1.png").arg(index + 1);
+                        const auto path = evidenceBase + ".png";
                         if (!image.copy(s.region).save(path)) {error = "無法保存 OCR 截圖"; break;}
-                        const auto prepared = evidenceDirectory + QString("/step_%1_ocr.png").arg(index + 1);
+                        const auto prepared = evidenceBase + "_ocr.png";
                         if (!prepareOcrImage(image.copy(s.region)).save(prepared)) {error = "無法準備文字辨識圖片"; break;}
                         QProcess ocr;
                         const auto engine = detectOcrExecutable(flow.ocrExecutable);
@@ -462,8 +620,9 @@ void FlowRunner::run()
             if (m_stop) {emit stepFinished(index, "STOP", detail); break;}
             if (ok && (s.type == "readUIA" || s.type == "readOCR")) emit valueRead(value);
             const bool readStep=s.type=="readUIA" || s.type=="readOCR";
-            emit stepFinished(index, ok ? "PASS" : "FAIL", ok || (readStep && !detail.isEmpty()) ? detail : error + (detail.isEmpty() ? QString() : "；" + detail));
-            emit progress((ok ? "PASS: " : "FAIL: ") + (ok ? detail : error));
+            const QString resultDetail = ok || (readStep && !detail.isEmpty()) ? detail : error + (detail.isEmpty() ? QString() : "；" + detail);
+            emit stepFinished(index, ok ? "PASS" : "FAIL", ok ? resultDetail : failureContext(index, resultDetail));
+            emit progress(ok ? "PASS: " + detail : "FAIL: " + failureContext(index, error));
             if (!ok) {
                 QString screenshotError;
                 const auto image = capture(screenshotError);
@@ -471,7 +630,7 @@ void FlowRunner::run()
                 success = false; break;
             }
         }
-        emit completed(success && !m_stop, m_stop);
+        emit completed(success && !m_stop && !scriptStopped, m_stop || scriptStopped);
     }
     if (SUCCEEDED(initialized)) CoUninitialize();
 }

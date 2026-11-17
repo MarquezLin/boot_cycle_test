@@ -36,14 +36,14 @@ bool relayAgentSettingsValid(const RelaySettings &settings, QString &error)
 }
 
 static QJsonObject requestAgent(const RelaySettings &settings, const QString &id, bool cancel, QString &error,
-    bool *stoppedByAgent = nullptr, bool *retryable = nullptr)
+    bool *stoppedByAgent = nullptr, bool *retryable = nullptr, bool readState = false)
 {
     const bool probe = id.isEmpty();
     QUrl url(settings.agentUrl);
     url.setPath(probe ? "/health" : "/power-cycle");
     QUrlQuery query;
     if (!probe) query.addQueryItem("id", id);
-    if (!probe && !cancel) {
+    if (!probe && !cancel && !readState) {
         query.addQueryItem("delay", QString::number(settings.delaySeconds));
         query.addQueryItem("ticks", QString::number(settings.ticks));
     }
@@ -54,7 +54,7 @@ static QJsonObject requestAgent(const RelaySettings &settings, const QString &id
     manager.setProxy(QNetworkProxy::NoProxy);
 
     for (int attempt = 0; attempt < (probe ? 1 : 2); ++attempt) {
-        auto *reply = probe ? manager.get(request)
+        auto *reply = (probe || readState) ? manager.get(request)
             : cancel ? manager.deleteResource(request) : manager.post(request, QByteArray());
         QEventLoop loop;
         QTimer timeout;
@@ -84,11 +84,12 @@ static QJsonObject requestAgent(const RelaySettings &settings, const QString &id
         delete reply;
         if (status == 200) {
             const int channel = result.value("channel").toInt();
+            const auto state = result.value("state").toString();
             const bool confirmed = probe ? result.value("state").toString() == "online" && channel >= 1 && channel <= 4
                 : result.value("id").toString() == id
-                    && result.value("state").toString() == (cancel ? "cancelled" : "scheduled");
+                    && (readState ? !state.isEmpty() : state == (cancel ? "cancelled" : "scheduled"));
             if (confirmed) {
-                if (!probe && !cancel && result.contains("remainingMs")
+                if (!probe && !cancel && !readState && result.contains("remainingMs")
                     && result.value("remainingMs").toInteger(-1) < (settings.delaySeconds - 5) * 1000LL) {
                     if (retryable) *retryable = false;
                     error = "重連後確認排程時，剩餘關機緩衝不足，將嘗試取消排程。";
@@ -135,6 +136,17 @@ bool scheduleRelayAgent(const RelaySettings &settings, QString &requestId, QStri
 bool cancelRelayAgent(const RelaySettings &settings, const QString &requestId, QString &error)
 {
     return !requestAgent(settings, requestId, true, error).isEmpty();
+}
+
+QString relayAgentRequestState(const RelaySettings &settings, const QString &requestId, QString &error)
+{
+    if (!relayAgentSettingsValid(settings, error)) return {};
+    if (QUuid(requestId).isNull()) {
+        error = "排程識別碼無效";
+        return {};
+    }
+    return requestAgent(settings, requestId, false, error, nullptr, nullptr, true)
+        .value("state").toString();
 }
 
 void showRelayAgentSettings(const QString &directory, QWidget *parent,
