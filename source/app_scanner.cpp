@@ -194,7 +194,7 @@ AppScanResult readAppScanResult(const QByteArray &data)
 
 AppScannerDialog::AppScannerDialog(const TestFlow &base,QWidget *parent):QDialog(parent),m_base(base) {
     setWindowTitle("掃描 APP，勾選建立測試腳本");resize(1100,800);setMinimumSize(850,650);
-    auto *layout=new QVBoxLayout(this);auto *intro=new QLabel("1 選擇已開啟的待測視窗並掃描 → 2 勾選、調整順序及確認預期文字 → 3 加入編輯器試跑。\n掃描只讀取控制項；產生草稿也不會點擊按鈕。不需 AI 帳號。");intro->setWordWrap(true);layout->addWidget(intro);
+    auto *layout=new QVBoxLayout(this);auto *intro=new QLabel("1 選擇已開啟的待測視窗並掃描 → 2 勾選、調整順序及確認預期文字 → 3 加入編輯器試跑。\n掃描只讀取控制項；產生草稿也不會點擊按鈕。");intro->setWordWrap(true);layout->addWidget(intro);
     auto *row=new QHBoxLayout;m_windows=new QComboBox;m_scan=new QPushButton("掃描視窗");m_refresh=new QPushButton("重新整理");
     row->addWidget(m_windows,1);row->addWidget(m_refresh);row->addWidget(m_scan);layout->addLayout(row);
     m_status=new QLabel("請先在編輯器開啟待測 APP（F6），再選擇視窗。");m_status->setWordWrap(true);layout->addWidget(m_status);

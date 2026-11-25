@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GVFG_BootCycleTest VERSION 1.3.3 LANGUAGES CXX)
+project(GVFG_BootCycleTest VERSION 1.3.5 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "GVFG_BootCycleTest requires Windows.")
@@ -135,6 +135,16 @@ qt_generate_deploy_app_script(
     NO_TRANSLATIONS
 )
 install(SCRIPT ${deploy_script})
+if(MSVC)
+    # windeployqt ships the installer; also place the CRT beside both EXEs.
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    include(InstallRequiredSystemLibraries)
+    foreach(runtime IN ITEMS msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll)
+        if(NOT "${MSVC_CRT_DIR}/${runtime}" IN_LIST CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+            install(CODE "message(FATAL_ERROR \"Missing x64 MSVC redistributable DLL: ${runtime}\")")
+        endif()
+    endforeach()
+endif()
 install(FILES examples/sample_capture_card_test.json DESTINATION examples)
 install(DIRECTORY DESTINATION dut)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dut/" DESTINATION dut OPTIONAL)
