@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QCoreApplication>
@@ -47,6 +48,9 @@ int executeBootFlow(const TestFlow &flow, const std::wstring &directory, const s
     QObject::connect(&runner, &FlowRunner::stepStarted, &loop, [&](int index) {
         event({{"event", "start"}, {"index", index}});
     });
+    QObject::connect(&runner, &FlowRunner::loopJumped, &loop, [&](int index, int completedJumps) {
+        event({{"event", "loopJump"}, {"index", index}, {"completedJumps", completedJumps}});
+    });
     QObject::connect(&runner, &FlowRunner::stepObserved, &loop, [&](int index, const QString &value) {
         event({{"event", "observed"}, {"index", index}, {"value", value}});
     });
@@ -84,6 +88,8 @@ bool bootFlowProgressSelfTest()
     if (!saveFlow(path, flow, error)) return false;
     FlowMonitor monitor; int plans = 0, starts = 0, finishes = 0;
     QVector<int> startedSteps;
+    QStringList loopProgress;
+    auto *loopSummary = monitor.findChild<QLabel *>("loopSummary");
     auto receive = [&](const std::wstring &message) {
         const QString line = QString::fromStdWString(message);
         if (!line.startsWith("FLOW_EVENT ")) return;
@@ -95,6 +101,8 @@ bool bootFlowProgressSelfTest()
         }
         if (object["event"] == "finish") ++finishes;
         monitor.applyEvent(object);
+        if (object["event"] == "plan" || object["event"] == "loopJump")
+            loopProgress.append(loopSummary->text());
     };
     std::wstring problem;
     const auto runSavedFlow = [&] {
@@ -115,8 +123,14 @@ bool bootFlowProgressSelfTest()
     flow.steps = {step, step, jump, step};
     for (auto &s : flow.steps) s.testItemId = "g";
     startedSteps.clear();
+    loopProgress.clear();
     if (!saveFlow(path, flow, error) || runSavedFlow() != 0
-        || startedSteps != QVector<int>{0, 1, 2, 1, 2, 1, 2, 3}) return false;
+        || startedSteps != QVector<int>{0, 1, 2, 1, 2, 1, 2, 3}
+        || loopProgress != QStringList{
+            "第 3 步 → 第 2 步　已跳轉 0 / 2 次",
+            "第 3 步 → 第 2 步　已跳轉 1 / 2 次",
+            "第 3 步 → 第 2 步　已跳轉 2 / 2 次"}
+        || loopSummary->text() != loopProgress.last()) return false;
 
     FlowStep image;
     image.type = "checkImage";
@@ -181,6 +195,34 @@ bool bootFlowProgressSelfTest()
     QFile log(formal.filePath("boot_cycle_detail.log"));
     if (!log.open(QIODevice::ReadOnly) || !log.readAll().contains("STOP detected at scripted stop step; no power action"))
         return false;
+
+    QTemporaryDir failedRun;
+    if (!failedRun.isValid()) return false;
+    QSettings failedSettings(failedRun.filePath("test_settings.ini"), QSettings::IniFormat);
+    failedSettings.setValue("Test/StartupDelaySeconds", 0);
+    failedSettings.sync();
+    FlowStep missingWindow;
+    missingWindow.type = "waitWindow";
+    missingWindow.windowTitle = QUuid::createUuid().toString();
+    missingWindow.timeoutMs = 100;
+    flow.steps = {missingWindow, step};
+    if (!saveFlow(path, flow, error)) return false;
+    // Cap the run so even a regression cannot request a restart.
+    wchar_t warm[] = L"--warm-reboot", limit[] = L"--last-formal-cycle", one[] = L"1";
+    wchar_t *failedArgs[] = {argv[0], argv[1], argv[2], argv[3], argv[4], warm, limit, one, argv[7]};
+    if (runBootTestInDirectory(8, failedArgs, failedRun.path()) != 1
+        || !QFile::exists(failedRun.filePath("FAILED")) || QFile::exists(failedRun.filePath("STOP"))) return false;
+    QFile failedLog(failedRun.filePath("boot_cycle_detail.log"));
+    if (!failedLog.open(QIODevice::ReadOnly)) return false;
+    const auto failureLog = QString::fromUtf8(failedLog.readAll());
+    if (!failureLog.contains("步驟 1：") || failureLog.contains("Cycle limit reached")) return false;
+    failedLog.close();
+    if (!QFile::remove(failedRun.filePath("FAILED")) || !failedLog.remove()) return false;
+    if (runBootTestInDirectory(9, failedArgs, failedRun.path()) != 0
+        || QFile::exists(failedRun.filePath("FAILED")) || !QFile::exists(failedRun.filePath("STOP"))) return false;
+    if (!failedLog.open(QIODevice::ReadOnly)) return false;
+    const auto continuedLog = QString::fromUtf8(failedLog.readAll());
+    if (!continuedLog.contains("FAIL:") || !continuedLog.contains("Cycle limit reached")) return false;
 
     flow.steps = repeatSteps;
     flow.steps[0].timeoutMs = 1500;

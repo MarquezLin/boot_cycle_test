@@ -1,7 +1,7 @@
 {
     "arguments": "",
-    "executable": "C:/Users/mark/Desktop/GVFG_Customer_Sample_Release_1.0.0_20260923_1106/gvfg_qt_preview.exe",
-    "ocrExecutable": "C:/Users/mark/Desktop/GcaptureSDK/GVFG_SDK/boot_cycle_test/release/_CPack_Packages/win64/ZIP/GVFG_BootCycleTest-1.1.1-Windows-x64/bin/ocr/tesseract.exe",
+    "executable": "dut/GVFG_Customer_Sample_Release_1.0.2_20261117/gvfg_qt_preview.exe",
+    "ocrExecutable": "third_party/ocr/tesseract.exe",
     "ocrLanguage": "chi_tra+eng",
     "reuseExisting": true,
     "schemaVersion": 1,
@@ -47,7 +47,7 @@
             "timeoutMs": 10000,
             "type": "clickUIA",
             "width": 0,
-            "windowTitle": "GVFG Preview Sample - SDK v1.0.1",
+            "windowTitle": "GVFG Preview Sample - APP v1.0.2",
             "x": 210,
             "y": 122
         },
@@ -62,7 +62,7 @@
             "timeoutMs": 30000,
             "type": "readOCR",
             "width": 54,
-            "windowTitle": "GVFG Preview Sample - SDK v1.0.1",
+            "windowTitle": "GVFG Preview Sample - APP v1.0.2",
             "x": 39,
             "y": 149
         },
@@ -77,7 +77,7 @@
             "timeoutMs": 30000,
             "type": "readOCR",
             "width": 139,
-            "windowTitle": "GVFG Preview Sample - SDK v1.0.1",
+            "windowTitle": "GVFG Preview Sample - APP v1.0.2",
             "x": 203,
             "y": 169
         },
@@ -92,7 +92,7 @@
             "timeoutMs": 10000,
             "type": "checkImage",
             "width": 1146,
-            "windowTitle": "GVFG Preview - CH0",
+            "windowTitle": "GVFG Preview - #1 - CH0",
             "x": 25,
             "y": 171
         },
@@ -107,7 +107,7 @@
             "timeoutMs": 10000,
             "type": "clickUIA",
             "width": 0,
-            "windowTitle": "GVFG Preview Sample - SDK v1.0.1",
+            "windowTitle": "GVFG Preview Sample - APP v1.0.2",
             "x": 359,
             "y": 117
         }

@@ -618,8 +618,8 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
     if (scriptHasStop) continueOnFailure = false;
 
     appendDetail(dir, warmReboot ? L"Mode=warm (Windows restart)" : L"Mode=cold (external power cycle)");
-    unsigned long long cycle = 1;
     quint64 formalCycles = 0;
+    quint64 trialCycles = 0;
     std::ifstream history(dir / "boot_cycle_detail.log", std::ios::binary);
     std::string historyLine;
     while (std::getline(history, historyLine)) {
@@ -627,10 +627,18 @@ int runBootTestInDirectory(int argc, wchar_t **argv,const QString &directory)
         const auto separator = historyLine.find(" | ");
         if (separator != std::string::npos) {
             const auto message = historyLine.substr(separator + 3);
-            if (message == "Boot check started" || message == "Dry-run started") ++cycle;
             if (message == "Boot check started") ++formalCycles;
+            else if (message == "Dry-run started") ++trialCycles;
         }
     }
+    QStringList baseline;
+    if (!managedWork.isEmpty()) {
+        const QSettings settings(root + "/test_settings.ini", QSettings::IniFormat);
+        baseline = settings.value("Statistics/Baseline").toStringList();
+    }
+    const quint64 cycle = 1
+        + (formalCycles - qMin(formalCycles, baseline.value(0).toULongLong()))
+        + (trialCycles - qMin(trialCycles, baseline.value(1).toULongLong()));
     const auto finishAtLimit = [&]() {
         appendDetail(dir, L"Cycle limit reached; no power action");
         QSaveFile marker(QString::fromStdWString((dir / "STOP").wstring()));

@@ -32,10 +32,18 @@ public:
     bool hasResults() const {return m_started;}
     int testItemCount() const;
 private:
-    struct Entry {QString title, type, detail, observed, state = "pending"; qint64 elapsed = 0; QString itemId;};
+    struct Entry {
+        QString title, type, detail, observed, state = "pending";
+        qint64 elapsed = 0;
+        QString itemId;
+        int targetStep = 0;
+        int jumpCount = 0;
+        int completedJumps = 0;
+    };
     void activate(int row);
     void setState(int row, const QString &state, const QString &detail = {});
     void refresh();
+    void refreshLoopSummary();
     void showDetails();
     void rebuildDisplay();
     int displayRow(int rawRow) const;
@@ -45,6 +53,7 @@ private:
     QListWidget *m_list;
     QTimer *m_timer;
     QPlainTextEdit *m_guidance;
+    QLabel *m_loopSummary;
     QVector<QVector<int>> m_displayRows;
     QMap<QString,QJsonObject> m_testItems;
     QVector<Entry> m_entries;

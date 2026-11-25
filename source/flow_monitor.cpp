@@ -67,6 +67,8 @@ public:
     }
 };
 QString stepDescription(const FlowStep &s) {
+    if (s.type == "loop")
+        return QString("跳回第 %1 步 · 設定 %2 次").arg(s.targetStep).arg(s.jumpCount);
     QStringList parts;
     if(!s.windowTitle.isEmpty()) parts << "視窗："+s.windowTitle;
     if(!s.automationId.isEmpty()) parts << "控制項 ID："+s.automationId;
@@ -82,8 +84,15 @@ QString stepDescription(const FlowStep &s) {
 
 QJsonObject flowMonitorPlan(const TestFlow &flow) {
     QJsonArray steps;
-    for(const auto &s:flow.steps) steps.append(QJsonObject{{"title",s.name.isEmpty()?flowTypeName(s.type):flowStepDisplayName(s)},
-        {"type",flowTypeName(s.type)},{"detail",flowCheckSummary(s).isEmpty()?stepDescription(s):"PASS："+flowCheckSummary(s)+" · "+stepDescription(s)},{"testItemId",s.testItemId}});
+    for(const auto &s:flow.steps) {
+        QJsonObject step{{"title",s.name.isEmpty()?flowTypeName(s.type):flowStepDisplayName(s)},
+            {"type",flowTypeName(s.type)},{"detail",flowCheckSummary(s).isEmpty()?stepDescription(s):"PASS："+flowCheckSummary(s)+" · "+stepDescription(s)},{"testItemId",s.testItemId}};
+        if (s.type == "loop") {
+            step.insert("targetStep", s.targetStep);
+            step.insert("jumpCount", s.jumpCount);
+        }
+        steps.append(step);
+    }
     QJsonArray items;
     for(const auto &item:flow.testItems) items.append(QJsonObject{{"id",item.id},{"name",flowItemDisplayName(flow,item)},{"instruction",item.instruction},{"runningText",item.runningText},{"failureHint",item.failureHint}});
     return {{"event","plan"},{"steps",steps},{"testItems",items},{"name",flow.name},{"version",flow.version}};
@@ -97,6 +106,13 @@ FlowMonitor::FlowMonitor(QWidget *parent):QWidget(parent) {
     m_guidance->setStyleSheet("QPlainTextEdit {background: #eff6ff; color: #1e3a5f; border: 1px solid #dbeafe; border-radius: 8px; padding: 8px; font-size: 16px;}");
     layout->addWidget(m_guidance);
     m_progress=new QProgressBar;m_progress->setRange(0,1);m_progress->setValue(0);m_progress->setFormat("尚未開始");m_progress->setFixedHeight(18);layout->addWidget(m_progress);
+    m_loopSummary = new QLabel;
+    m_loopSummary->setObjectName("loopSummary");
+    m_loopSummary->setTextFormat(Qt::PlainText);
+    m_loopSummary->setWordWrap(true);
+    m_loopSummary->setStyleSheet("background: #eff6ff; color: #1e3a5f; border-radius: 8px; padding: 8px; font-weight: 600;");
+    m_loopSummary->hide();
+    layout->addWidget(m_loopSummary);
     m_list=new QListWidget;m_list->setItemDelegate(new CardDelegate(m_list));m_list->setSpacing(0);
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_list->setStyleSheet("QListWidget {background: #f8fafc; border: none;} QListWidget::item {border: none;}");layout->addWidget(m_list,1);
@@ -113,12 +129,31 @@ void FlowMonitor::setPlan(const QJsonObject &plan) {
     const auto steps=plan.value("steps").toArray();
     if(!steps.isEmpty()) {
         m_entries.append({"準備測試","環境與啟動等待","檢查設定，等待開始執行 JSON"});
-        for(const auto &value:steps) {const auto s=value.toObject();Entry e;e.title=s["title"].toString();e.type=s["type"].toString();e.detail=s["detail"].toString();e.itemId=s["testItemId"].toString();m_entries.append(e);}
+        for(const auto &value:steps) {
+            const auto s=value.toObject();
+            Entry e;
+            e.title=s["title"].toString();e.type=s["type"].toString();e.detail=s["detail"].toString();e.itemId=s["testItemId"].toString();
+            e.targetStep = s["targetStep"].toInt();
+            e.jumpCount = s["jumpCount"].toInt();
+            m_entries.append(e);
+        }
         m_entries.append({"結果與下一步","試跑／電源控制",m_tail});
     }
     rebuildDisplay();
+    refreshLoopSummary();
     refresh();
     if(m_entries.isEmpty()) {m_current->setText(plan.value("error").toString("請先匯入 JSON 流程。"));m_details->setText("匯入後顯示設定步驟；執行中會自動追蹤目前位置。");}
+}
+void FlowMonitor::refreshLoopSummary() {
+    QStringList lines;
+    for (int row = 1; row < m_entries.size() - 1; ++row) {
+        const auto &entry = m_entries[row];
+        if (entry.targetStep > 0)
+            lines.append(QString("第 %1 步 → 第 %2 步　已跳轉 %3 / %4 次")
+                .arg(row).arg(entry.targetStep).arg(entry.completedJumps).arg(entry.jumpCount));
+    }
+    m_loopSummary->setText(lines.join('\n'));
+    m_loopSummary->setVisible(!lines.isEmpty());
 }
 void FlowMonitor::setTailDescription(const QString &description) {
     m_tail=description;if(!m_entries.isEmpty()) m_entries.last().detail=description;refresh();
@@ -145,6 +180,14 @@ void FlowMonitor::applyEvent(const QJsonObject &event) {
     const int row=event.value("index").toInt(-1)+1;
     if(row<1 || row>=m_entries.size()-1)return;
     if(kind=="start") {if(row==1)setState(0,"pass");activate(row);}
+    else if(kind=="loopJump") {
+        auto &entry = m_entries[row];
+        const int completed = event.value("completedJumps").toInt(-1);
+        if (entry.targetStep > 0 && completed > entry.completedJumps && completed <= entry.jumpCount) {
+            entry.completedJumps = completed;
+            refreshLoopSummary();
+        }
+    }
     else if(kind=="observed") {m_entries[row].observed=event["value"].toString();refresh();}
     else if(kind=="finish") {
         const QString result=event["result"].toString();
@@ -296,6 +339,19 @@ void FlowMonitor::showDetails() {
 }
 bool FlowMonitor::selfTest() {
     TestFlow f;FlowStep a;a.name="啟動 APP";a.type="launch";FlowStep b;b.name="讀取狀態";b.type="readUIA";f.steps={a,b};
+    FlowStep jump;
+    jump.type = "loop";
+    jump.targetStep = 1;
+    jump.jumpCount = 500;
+    TestFlow loopFlow;
+    loopFlow.steps = {a, jump};
+    setEngineering(true);
+    setPlan(flowMonitorPlan(loopFlow));
+    if (m_list->item(2)->data(DetailRole).toString() != "跳回第 1 步 · 設定 500 次"
+        || rowState(2) != "pending") return false;
+    m_list->setCurrentRow(2);
+    if (!m_details->text().contains("跳回第 1 步 · 設定 500 次")) return false;
+    setEngineering(false);
     setPlan(flowMonitorPlan(f));begin("等待啟動");if(currentRow()!=0)return false;
     applyEvent({{"event","start"},{"index",0}});if(rowState(0)!="pass" || currentRow()!=1)return false;
     applyEvent({{"event","finish"},{"index",0},{"result","PASS"}});

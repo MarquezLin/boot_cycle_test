@@ -311,6 +311,17 @@ bool sendRelayPulse(const RelaySettings &s, const std::function<void(const QStri
     return true;
 }
 
+bool setRelayPower(const RelaySettings &s, bool powered,
+    const std::function<void(const QString &)> &log, QString &error)
+{
+    const auto command = coilRequest(s, s.normallyClosed != powered);
+    QByteArray reply;
+    if (!exchange(s, command, 8, log, reply, error)) return false;
+    if (reply == command) return true;
+    error = "回覆與接點設定命令不符";
+    return false;
+}
+
 namespace {
 struct StatusResult {bool success = false; QString error, details; unsigned char states = 0;};
 StatusResult readStatus(const RelaySettings &s, HANDLE existing = INVALID_HANDLE_VALUE)

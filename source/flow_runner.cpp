@@ -421,7 +421,9 @@ void FlowRunner::run()
                 } else if (jumps[index] < s.jumpCount) {
                     next = s.targetStep - 1;
                     if (!activeLoops.contains(index)) activeLoops.append(index);
-                    detail = QString("跳轉至第 %1 步（%2/%3）").arg(s.targetStep).arg(++jumps[index]).arg(s.jumpCount);
+                    ++jumps[index];
+                    emit loopJumped(index, jumps[index]);
+                    detail = QString("跳轉至第 %1 步（%2/%3）").arg(s.targetStep).arg(jumps[index]).arg(s.jumpCount);
                 } else {
                     activeLoops.removeOne(index);
                     detail = QString("已完成 %1 次跳轉，繼續執行").arg(s.jumpCount);

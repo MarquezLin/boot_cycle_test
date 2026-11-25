@@ -237,8 +237,8 @@ void MainWindow::pollRelayAgent()
     QString state = "idle";
     if (m_shutdownRequested) state = "shutdown";
     else if (m_running) state = m_stopping ? "stopping" : m_relayReconnecting ? "reconnecting" : "running";
-    else if (m_stopping) state = "stopped";
     else if (m_fail) state = "failed";
+    else if (m_stopping) state = "stopped";
     else if (m_pass) state = "passed";
     query.addQueryItem("state", state);
     query.addQueryItem("total", QString::number(
@@ -537,13 +537,16 @@ void MainWindow::startTest(bool dry, bool automatic)
         }
     }
     const bool warm = warmMode();
+    const auto reportBaseline = m_statisticsBaseline[0] + m_statisticsBaseline[1];
     QString reportSession;
-    if (!dry && automatic && settings.value("Report/FormalWarm").toBool() == warm)
+    if (!dry && automatic && settings.value("Report/FormalWarm").toBool() == warm
+        && settings.value("Report/FormalBaseline").toULongLong() == reportBaseline)
         reportSession = settings.value("Report/FormalSession").toString();
     if (reportSession.isEmpty()) reportSession = QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (!dry) {
         settings.setValue("Report/FormalSession", reportSession);
         settings.setValue("Report/FormalWarm", warm);
+        settings.setValue("Report/FormalBaseline", reportBaseline);
     }
     settings.setValue("Report/LatestSession", reportSession);
     auto sessions = settings.value("Report/Sessions").toStringList();
@@ -739,13 +742,15 @@ bool MainWindow::clearRecordFiles(const QString &session, QString &error)
 void MainWindow::resetStatistics()
 {
     if (m_running) return;
-    if (QMessageBox::question(this, "重設累計次數", "要將底部統計歸零嗎？歷史紀錄與報告會保留。",
+    if (QMessageBox::question(this, "重設累計次數", "要將累計次數歸零嗎？下次測試會建立新報告，從第 1 輪開始。舊報告仍可查閱。",
                               QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes || m_running) return;
     const auto totals = statisticsTotals();
     QStringList baseline;
     for (const auto count : totals) baseline.append(QString::number(count));
     QSettings settings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     settings.setValue("Statistics/Baseline", baseline);
+    settings.remove("Report/FormalSession");
+    settings.remove("Report/LatestSession");
     settings.sync();
     if (settings.status() != QSettings::NoError) {
         QMessageBox::warning(this, "無法重設累計次數", "無法儲存統計設定。");
@@ -984,7 +989,14 @@ void MainWindow::finishTest(int exitCode, QProcess::ExitStatus status)
 {
     readLog(); m_logTimer.stop(); setRunning(false);
     m_relayReconnecting = false;
-    if (exitCode != 0 || status != QProcess::NormalExit) m_shutdownRequested = false;
+    if (exitCode != 0 || status != QProcess::NormalExit) {
+        m_shutdownRequested = false;
+        m_fail = true;
+    }
+    if (m_fail && !m_shutdownRequested) {
+        if (m_relayPolling) m_relayRefreshPending = true;
+        else pollRelayAgent();
+    }
     if (exitCode == 0 && status == QProcess::NormalExit && !m_dry) {
         QFile marker(m_dir + "/STOP");
         if (marker.open(QIODevice::ReadOnly) && marker.readLine().trimmed() == "Cycle limit reached") {
@@ -1159,6 +1171,7 @@ bool MainWindow::smokeTest()
     const QString otherWork = m_dir + "/report_work/" + otherSession;
     QSettings reportSettings(m_dir + "/test_settings.ini", QSettings::IniFormat);
     reportSettings.setValue("Report/LatestSession", reportSession);
+    reportSettings.setValue("Report/FormalSession", otherSession);
     const QString otherEntry = otherSession + "|formal|cold|other";
     reportSettings.setValue("Report/Sessions", QStringList{otherEntry, reportSession + "|trial|warm|fixture"});
     reportSettings.sync();
@@ -1197,7 +1210,11 @@ bool MainWindow::smokeTest()
     loadHistory();
     const bool reset = m_formalCount == 3 && m_dryCount == 1
         && m_results == std::array<quint64, 4>{1, 1, 1, 1}
-        && ui->statisticsLabel->text().startsWith("累計 0 次");
+        && ui->statisticsLabel->text().startsWith("累計 0 次")
+        && !reportSettings.contains("Report/FormalSession")
+        && !reportSettings.contains("Report/LatestSession")
+        && reportSettings.value("Report/Sessions").toStringList() == QStringList{otherEntry}
+        && QDir(otherWork).exists();
     QTemporaryDir importedRecords(originalDir + "/flow_import_check_XXXXXX");
     if (!importedRecords.isValid()) return false;
     m_dir = importedRecords.path();

@@ -30,6 +30,7 @@ public:
 signals:
     void progress(const QString &line);
     void stepStarted(int index);
+    void loopJumped(int index, int completedJumps);
     void stepObserved(int index, const QString &value);
     void windowResolved(int index, const QString &title);
     void stepFinished(int index, const QString &result, const QString &value);

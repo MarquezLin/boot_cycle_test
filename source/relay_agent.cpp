@@ -138,14 +138,16 @@ bool cancelRelayAgent(const RelaySettings &settings, const QString &requestId, Q
     return !requestAgent(settings, requestId, true, error).isEmpty();
 }
 
-QString relayAgentRequestState(const RelaySettings &settings, const QString &requestId, QString &error)
+QString relayAgentRequestState(const RelaySettings &settings, const QString &requestId, QString &error,
+                               bool *retryable)
 {
+    if (retryable) *retryable = false;
     if (!relayAgentSettingsValid(settings, error)) return {};
     if (QUuid(requestId).isNull()) {
         error = "排程識別碼無效";
         return {};
     }
-    return requestAgent(settings, requestId, false, error, nullptr, nullptr, true)
+    return requestAgent(settings, requestId, false, error, nullptr, retryable, true)
         .value("state").toString();
 }
 

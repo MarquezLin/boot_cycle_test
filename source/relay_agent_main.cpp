@@ -5,6 +5,10 @@
 #include <QDialog>
 #include <QComboBox>
 #include <QElapsedTimer>
+#include <QDateTime>
+#include <QFile>
+#include <QLockFile>
+#include <QMessageBox>
 #include <QFormLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -182,9 +186,11 @@ public:
             const QString id = pending.value(devices.currentRow() + 1);
             if (!id.isEmpty() && requests[id].state == "scheduled") cancelPending(id);
         });
+        recoverPower();
         if (autoListen) startListening();
         refreshSerialStatus();
         updateUi();
+        dispatchNext();
     }
 
     ~RelayAgent() override
@@ -196,7 +202,7 @@ protected:
     void closeEvent(QCloseEvent *event) override
     {
         if (!pending.isEmpty()) {
-            log.appendPlainText("仍有排程。可選擇通道取消待執行排程，或等候送出指令。");
+            appendLog("仍有排程。可選擇通道取消待執行排程，或等候送出指令。");
             event->ignore();
             return;
         }
@@ -223,8 +229,15 @@ private:
         qint64 shutdownDeadline = 0;
         int offlineChecks = 0;
         bool checking = false;
+        RelaySettings powerSettings;
+        bool cutAcknowledged = false;
     };
-    struct SendResult { bool sent = false; QString error; QStringList log; };
+    struct SendResult {
+        bool sent = false;
+        QString error;
+        QList<QPair<QDateTime, QString>> log;
+        QDateTime completedAt;
+    };
     struct DeviceReport {
         QString name, state, command, id;
         qint64 seen = 0, commandUntil = 0;
@@ -265,7 +278,7 @@ private:
         if (command == "start") {
             refreshSerialStatus();
             if (!serialReady) {
-                log.appendPlainText("無法開始測試：" + serialStatusError);
+                appendLog("無法開始測試：" + serialStatusError);
                 updateUi();
                 return;
             }
@@ -276,7 +289,7 @@ private:
         const QString pendingRequest = pending.value(row + 1);
         if (command == "stop" && !pendingRequest.isEmpty() && requests[pendingRequest].state == "scheduled")
             cancelPending(pendingRequest);
-        log.appendPlainText(QString("CH%1 %2：已要求%3測試").arg(row + 1).arg(address.toString(),
+        appendLog(QString("CH%1 %2：已要求%3測試").arg(row + 1).arg(address.toString(),
             command == "start" ? QString("開始") : QString("停止")));
         updateUi();
     }
@@ -306,12 +319,12 @@ private:
         const auto settings = loadRelaySettings(QCoreApplication::applicationDirPath());
         QString error;
         if (local.protocol() != QAbstractSocket::IPv4Protocol || local == QHostAddress::AnyIPv4) {
-            log.appendPlainText("請填入控制端 的 IPv4 位址。");
+            appendLog("請填入控制端 的 IPv4 位址。");
             return;
         }
         const QStringList addresses = localIpv4();
         if (!addresses.contains(local.toString())) {
-            log.appendPlainText(QString("Windows 目前沒有 %1。請儲存乙太網路的 IPv4 設定、確認網路線已接好，再按「重新整理本機 IP」。目前可用：%2")
+            appendLog(QString("Windows 目前沒有 %1。請儲存乙太網路的 IPv4 設定、確認網路線已接好，再按「重新整理本機 IP」。目前可用：%2")
                 .arg(local.toString(), addresses.join("、")));
             return;
         }
@@ -325,22 +338,22 @@ private:
             else if (configured.contains(client))
                 error = "每台待測 PC 的 IP 只能使用一次";
             if (!error.isEmpty()) {
-                log.appendPlainText(QString("CH%1：%2").arg(row + 1).arg(error));
+                appendLog(QString("CH%1：%2").arg(row + 1).arg(error));
                 return;
             }
             configured.insert(client, {row + 1, isNormallyClosed(row)});
         }
         if (!server.listen(local, quint16(port.value()))) {
-            log.appendPlainText(QString("無法監聽 %1:%2：%3").arg(local.toString()).arg(port.value()).arg(server.errorString()));
+            appendLog(QString("無法監聽 %1:%2：%3").arg(local.toString()).arg(port.value()).arg(server.errorString()));
             return;
         }
         routes = std::move(configured);
         if (!discovery.bind(QHostAddress(QHostAddress::AnyIPv4), relayDiscoveryPort))
-            log.appendPlainText("無法開啟 UDP 45454 自動搜尋：" + discovery.errorString() + "。可使用手動網址。");
+            appendLog("無法開啟 UDP 45454 自動搜尋：" + discovery.errorString() + "。可使用手動網址。");
         serialSettings = settings;
         auto resolved = serialSettings;
         if (!resolveRelayPort(resolved, error))
-            log.appendPlainText("已開始監聽，可測試網路連線。接受冷開機排程前請完成 RS485 設定：" + error);
+            appendLog("已開始監聽，可測試網路連線。接受冷開機排程前請完成 RS485 設定：" + error);
         refreshSerialStatus();
         config.setValue("Bind", local.toString());
         config.setValue("Port", port.value());
@@ -352,7 +365,7 @@ private:
             config.setValue(prefix + "NormallyClosed", isNormallyClosed(row));
         }
         config.sync();
-        if (config.status() != QSettings::NoError) log.appendPlainText("無法儲存控制端設定。");
+        if (config.status() != QSettings::NoError) appendLog("無法儲存控制端設定。");
     }
 
     bool isNormallyClosed(int row) const
@@ -402,14 +415,16 @@ private:
                     : scheduleText == "關機等待逾時" || scheduleText == "Ping 檢查失敗" ? Light::Red : Light::Gray;
             if (!id.isEmpty()) {
                 const auto &request = requests[id];
-                scheduleText = request.state == "sending" ? "待測端已離線，送出斷電指令"
+                scheduleText = request.state == "restoring" ? "送出復電指令"
+                    : request.state == "restore-pending" ? "等待復電 · " + remainingTime(qMax<qint64>(0, request.deadline - now))
+                    : request.state == "sending" ? "待測端已離線，送出斷電指令"
                     : request.checking ? "確認離線中" : request.deadline <= now ? "等待 RS485" : remainingTime(request.deadline - now);
                 scheduleLight = Light::Amber;
                 activePowerActions.append(QString("CH%1  %2").arg(row + 1).arg(scheduleText));
             }
             schedule->setText(scheduleText);
             schedule->setIcon(statusLight(scheduleLight));
-            schedule->setToolTip(!id.isEmpty() ? "倒數結束後送出 RS485 斷電指令。" : scheduleText);
+            schedule->setToolTip(scheduleText);
             const QHostAddress address(devices.item(row, 0)->text().trimmed());
             const auto report = reports.constFind(address);
             devices.item(row, 3)->setText(report == reports.cend() ? QString() : report->name);
@@ -457,7 +472,7 @@ private:
                 discovered.append(it->name + " (" + it.key().toString() + ")");
         unbound.setText(discovered.isEmpty() ? QString() : "已發現未綁定：" + discovered.join("、"));
         unbound.setVisible(!discovered.isEmpty());
-        serial.setEnabled(!running);
+        serial.setEnabled(!running && pending.isEmpty());
         listen.setEnabled(pending.isEmpty());
         const QString selected = pending.value(devices.currentRow() + 1);
         cancel.setEnabled(!selected.isEmpty() && requests[selected].state == "scheduled");
@@ -476,15 +491,103 @@ private:
             : "尚未監聽");
     }
 
-    void cancelPending(const QString &id)
+    void cancelPending(const QString &id, const QString &reason = {})
     {
         auto &request = requests[id];
         request.state = "cancelled";
         pending.remove(request.channel);
         lastResult[request.channel] = "已取消";
-        log.appendPlainText(QString("CH%1 %2 已取消").arg(request.channel).arg(id));
+        powerEvent(request.channel, id, reason.isEmpty() ? QString("已取消切電排程") : reason);
         updateUi();
         dispatchNext();
+    }
+
+    static QString powerPath(const QString &filename)
+    {
+        return QCoreApplication::applicationDirPath() + '/' + filename;
+    }
+
+    static QString timestamped(const QString &message, const QDateTime &time)
+    {
+        return time.toString(Qt::ISODateWithMs) + " | " + message;
+    }
+
+    void appendLog(const QString &message)
+    {
+        log.appendPlainText(timestamped(message, QDateTime::currentDateTime()));
+    }
+
+    void powerEvent(int channel, const QString &id, const QString &message,
+                    const QDateTime &time = QDateTime::currentDateTime())
+    {
+        const auto request = requests.constFind(id);
+        const QString peer = request != requests.cend() && !request->peer.isNull()
+            ? request->peer.toString() : QString("IP 未知");
+        const QString device = QString("CH%1 %2").arg(channel).arg(peer);
+        log.appendPlainText(timestamped(device + " | " + message, time));
+        const QString line = timestamped(device + ' ' + id + " | " + message, time);
+        const auto bytes = (line + '\n').toUtf8();
+        QFile file(powerPath("relay_agent_power.log"));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append)
+            || file.write(bytes) != bytes.size() || !file.flush())
+            appendLog("無法寫入 relay_agent_power.log：" + file.errorString());
+    }
+
+    bool saveRecovery(const QString &id, const Request &request, bool clear)
+    {
+        QSettings journal(powerPath("relay_agent_recovery.ini"), QSettings::IniFormat);
+        journal.beginGroup(QString::number(request.channel));
+        if (clear) {
+            journal.remove("");
+        } else {
+            const auto &settings = request.powerSettings;
+            journal.setValue("Id", id);
+            journal.setValue("Peer", request.peer.toString());
+            journal.setValue("Port", settings.port);
+            journal.setValue("UsbId", settings.usbId);
+            journal.setValue("DeviceInstance", settings.deviceInstance);
+            journal.setValue("Baud", settings.baud);
+            journal.setValue("Address", settings.address);
+            journal.setValue("NormallyClosed", settings.normallyClosed);
+        }
+        journal.sync();
+        return journal.status() == QSettings::NoError;
+    }
+
+    void recoverPower()
+    {
+        QSettings journal(powerPath("relay_agent_recovery.ini"), QSettings::IniFormat);
+        journal.sync();
+        recoveryFault = journal.status() != QSettings::NoError;
+        for (const auto &group : journal.childGroups()) {
+            journal.beginGroup(group);
+            const int channel = group.toInt();
+            const QString id = journal.value("Id").toString();
+            const QHostAddress peer(journal.value("Peer").toString());
+            RelaySettings settings;
+            settings.channel = channel;
+            settings.port = journal.value("Port").toString();
+            settings.usbId = journal.value("UsbId").toString();
+            settings.deviceInstance = journal.value("DeviceInstance").toString();
+            settings.baud = journal.value("Baud").toInt();
+            settings.address = journal.value("Address").toInt();
+            settings.normallyClosed = journal.value("NormallyClosed").toBool();
+            QString error;
+            if (id.isEmpty() || requests.contains(id) || pending.contains(channel)
+                || !journal.contains("NormallyClosed")
+                || !relaySettingsValid(settings, error)) {
+                recoveryFault = true;
+            } else {
+                auto entry = requests.insert(id, {channel, 0, 0, clock.elapsed(), "restore-pending"});
+                entry->peer = peer;
+                entry->powerSettings = settings;
+                pending.insert(channel, id);
+                powerEvent(channel, id, "Agent 啟動後補送復電");
+            }
+            journal.endGroup();
+        }
+        if (recoveryFault)
+            appendLog("復電紀錄無法完整讀取，已停用新的切電排程。");
     }
 
     void dispatchNext()
@@ -495,7 +598,10 @@ private:
         qint64 deadline = 0;
         for (const auto &candidate : std::as_const(pending)) {
             const qint64 due = requests[candidate].deadline;
-            if (id.isEmpty() || due < deadline) {
+            const bool restoreDue = requests[candidate].state == "restore-pending" && due <= clock.elapsed();
+            const bool selectedRestoreDue = !id.isEmpty() && requests[id].state == "restore-pending"
+                && deadline <= clock.elapsed();
+            if (id.isEmpty() || (restoreDue != selectedRestoreDue ? restoreDue : due < deadline)) {
                 id = candidate;
                 deadline = due;
             }
@@ -506,12 +612,16 @@ private:
             return;
         }
         auto &request = requests[id];
+        if (request.state == "restore-pending") {
+            sendPower(id, true);
+            return;
+        }
         if (probe) return;
         if (clock.elapsed() >= request.shutdownDeadline) {
             request.state = "shutdown-timeout";
             pending.remove(request.channel);
             lastResult[request.channel] = "關機等待逾時";
-            log.appendPlainText(QString("CH%1 %2 關機等待逾時，取消斷電排程").arg(request.channel).arg(id));
+            powerEvent(request.channel, id, "關機等待逾時，取消切電排程");
             updateUi();
             countdown.start(0);
             return;
@@ -534,11 +644,9 @@ private:
                         entry.state = "shutdown-timeout";
                         pending.remove(entry.channel);
                         lastResult[entry.channel] = "Ping 檢查失敗";
-                        log.appendPlainText(QString("CH%1 %2 %3，取消斷電排程")
-                            .arg(entry.channel).arg(id, lastResult.value(entry.channel)));
+                        powerEvent(entry.channel, id, "Ping 檢查失敗，取消切電排程");
                     } else if (entry.offlineChecks >= 2 && clock.elapsed() < entry.shutdownDeadline) {
-                        log.appendPlainText(QString("CH%1 %2 待測端已離線，準備送出斷電命令")
-                            .arg(entry.channel).arg(id));
+                        powerEvent(entry.channel, id, "待測端已離線，準備送出切電指令");
                     } else {
                         entry.deadline = qMin(clock.elapsed() + 1000, entry.shutdownDeadline);
                     }
@@ -562,32 +670,70 @@ private:
             updateUi();
             return;
         }
-        request.state = "sending";
-        auto settings = serialSettings;
-        settings.channel = request.channel;
-        settings.normallyClosed = contacts.value(request.channel);
-        settings.ticks = request.ticks;
+        request.powerSettings = serialSettings;
+        request.powerSettings.channel = request.channel;
+        request.powerSettings.normallyClosed = contacts.value(request.channel);
+        QString error;
+        if (recoveryFault || !resolveRelayPort(request.powerSettings, error)
+            || !saveRecovery(id, request, false)) {
+            request.state = "failed";
+            pending.remove(request.channel);
+            lastResult[request.channel] = "傳送未確認";
+            powerEvent(request.channel, id, "取消切電：" + (error.isEmpty()
+                ? QString("無法保存待復電紀錄") : error));
+            updateUi();
+            countdown.start(0);
+            return;
+        }
+        awaitingOnline.remove(request.channel);
+        sendPower(id, false);
+    }
+
+    void sendPower(const QString &id, bool powered)
+    {
+        auto &request = requests[id];
+        request.state = powered ? "restoring" : "sending";
+        const auto settings = request.powerSettings;
+        const QString action = powered ? "復電" : "切電";
+        powerEvent(request.channel, id, action + "指令開始");
         auto result = std::make_shared<SendResult>();
-        worker = QThread::create([settings, result] {
+        worker = QThread::create([settings, result, powered] {
             auto resolved = settings;
-            if (!resolveRelayPort(resolved, result->error)) return;
-            result->sent = sendRelayPulse(resolved,
-                [result](const QString &message) { result->log.append(message); }, result->error);
+            if (resolveRelayPort(resolved, result->error))
+                result->sent = setRelayPower(resolved, powered, [result](const QString &message) {
+                    result->log.append({QDateTime::currentDateTime(), message});
+                }, result->error);
+            result->completedAt = QDateTime::currentDateTime();
         });
         worker->setParent(this);
-        connect(worker, &QThread::finished, this, [this, id, result] {
+        connect(worker, &QThread::finished, this, [this, id, result, powered, action] {
             worker->deleteLater();
             worker = nullptr;
             auto &finished = requests[id];
             const int channel = finished.channel;
-            const QString prefix = QString("CH%1 %2 ").arg(channel).arg(id);
-            for (const auto &message : std::as_const(result->log)) log.appendPlainText(prefix + message);
-            finished.state = result->sent ? "sent" : "failed";
-            lastResult[channel] = result->sent ? "模組已確認" : "傳送未確認";
-            log.appendPlainText(prefix + (result->sent ? QString("模組已確認定時命令") : result->error));
-            // A missing ACK does not prove the relay ignored the command.
-            readyAfter[channel] = clock.elapsed() + qint64(finished.ticks) * 100;
-            pending.remove(channel);
+            const auto completed = clock.elapsed();
+            for (const auto &[time, message] : std::as_const(result->log))
+                powerEvent(channel, id, message, time);
+            powerEvent(channel, id, action + (result->sent ? QString(" ACK") : "未確認：" + result->error),
+                result->completedAt);
+            if (!powered) {
+                finished.cutAcknowledged = result->sent;
+                finished.state = "restore-pending";
+                finished.deadline = completed + (result->sent ? qint64(finished.ticks) * 100 : 0);
+                powerEvent(channel, id, result->sent
+                    ? QString("開始復電倒數，%1 秒").arg(finished.ticks / 10.0)
+                    : QString("切電未確認，立即嘗試復電"));
+            } else if (result->sent && saveRecovery(id, finished, true)) {
+                finished.state = finished.cutAcknowledged ? "sent" : "failed";
+                lastResult[channel] = finished.cutAcknowledged ? "模組已確認" : "傳送未確認";
+                pending.remove(channel);
+                awaitingOnline.insert(channel, id);
+            } else {
+                finished.state = "restore-pending";
+                finished.deadline = clock.elapsed() + 3000;
+                if (result->sent) powerEvent(channel, id, "無法清除待復電紀錄");
+                powerEvent(channel, id, "3 秒後重試復電");
+            }
             updateUi();
             dispatchNext();
         });
@@ -710,7 +856,11 @@ private:
                 respond(socket, 409, {{"error", "此排程 ID 已使用"}});
             return;
         }
-        if (pending.contains(channel) || clock.elapsed() < readyAfter.value(channel)) {
+        if (recoveryFault) {
+            respond(socket, 503, {{"error", "控制端無法完整讀取待復電紀錄"}});
+            return;
+        }
+        if (pending.contains(channel)) {
             respond(socket, 409, {{"error", "本通道仍有排程或正在等待復電"}});
             return;
         }
@@ -728,8 +878,8 @@ private:
         pending.insert(channel, id);
         contacts.insert(channel, route->normallyClosed);
         respond(socket, 200, {{"id", id}, {"state", "scheduled"}, {"remainingMs", delay * 1000}});
-        log.appendPlainText(QString("CH%1 %2 已接受，%3 秒後確認待測端離線，斷電維持 %4 秒")
-            .arg(channel).arg(id).arg(delay).arg(ticks / 10.0));
+        powerEvent(channel, id, QString("開始切電前倒數，%1 秒後確認待測端離線，設定斷電維持 %2 秒")
+            .arg(delay).arg(ticks / 10.0));
         updateUi();
         dispatchNext();
     }
@@ -747,6 +897,19 @@ private:
         if (report.name.isEmpty()) report.name = address.toString();
         report.state = query.queryItemValue("state").left(16);
         report.seen = clock.elapsed();
+        if (route != routes.cend()) {
+            if (report.state == "failed") {
+                const QString pendingId = pending.value(route->channel);
+                const auto request = requests.constFind(pendingId);
+                if (request != requests.cend() && request->peer == address && request->state == "scheduled")
+                    cancelPending(pendingId, "待測端回報 FAIL，已取消切電排程");
+            }
+            const QString id = awaitingOnline.value(route->channel);
+            if (!id.isEmpty() && requests[id].peer == address) {
+                awaitingOnline.remove(route->channel);
+                powerEvent(route->channel, id, "待測端重新報到");
+            }
+        }
         bool testedOk = false, targetOk = false;
         const auto tested = query.queryItemValue("tested").toULongLong(&testedOk);
         bool totalOk = false;
@@ -759,19 +922,19 @@ private:
             report.cycles.clear();
         if (!report.command.isEmpty() && query.queryItemValue("ack") == report.id) {
             const auto result = query.queryItemValue("result");
-            log.appendPlainText(QString("%1：%2").arg(address.toString(), result == "started" ? QString("已開始測試")
+            appendLog(QString("%1：%2").arg(address.toString(), result == "started" ? QString("已開始測試")
                 : result == "stopping" ? QString("已收到停止確認") : QString("指令未執行，請查看待測 PC")));
             report.command.clear();
         }
         if (!report.command.isEmpty() && report.commandUntil <= report.seen) {
-            log.appendPlainText(address.toString() + "：指令確認逾時");
+            appendLog(address.toString() + "：指令確認逾時");
             report.command.clear();
         }
         QJsonObject reply{{"channel", route == routes.cend() ? 0 : route->channel}};
         if (route != routes.cend() && report.command == "start") {
             refreshSerialStatus();
             if (!serialReady) {
-                log.appendPlainText(address.toString() + "：已取消開始測試指令，" + serialStatusError);
+                appendLog(address.toString() + "：已取消開始測試指令，" + serialStatusError);
                 report.command.clear();
             }
         }
@@ -800,11 +963,12 @@ private:
     QHash<QString, Request> requests;
     QHash<int, QString> pending, lastResult;
     QHash<int, bool> contacts;
-    QHash<int, qint64> readyAfter;
+    QHash<int, QString> awaitingOnline;
     QThread *worker = nullptr;
     QProcess *probe = nullptr;
     RelaySettings serialSettings;
     bool serialReady = false;
+    bool recoveryFault = false;
     QString serialStatusError;
 };
 }
@@ -812,6 +976,12 @@ private:
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    QLockFile instance(QCoreApplication::applicationDirPath() + "/relay_agent.lock");
+    instance.setStaleLockTime(0);
+    if (!instance.tryLock()) {
+        QMessageBox::warning(nullptr, "Relay Agent", "已有 Relay Agent 執行中，或無法寫入程式目錄。");
+        return 1;
+    }
     RelayAgent window(app.arguments().contains("--listen"));
     window.show();
     return app.exec();
